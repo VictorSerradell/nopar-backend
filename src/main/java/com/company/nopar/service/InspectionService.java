@@ -1,6 +1,7 @@
 package com.company.nopar.service;
 
 import com.company.nopar.dto.InspectionCreateRequest;
+import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.repository.VehicleInspectionRepository;
@@ -26,7 +27,7 @@ public class InspectionService {
             MultipartFile odometerPhoto,
             MultipartFile beaconPhoto,
             MultipartFile exteriorPhoto,
-            Long userId
+            User driver
     ) {
         // 1. Verificar que el vehículo existe
         Vehicle vehicle = vehicleRepository.findById(request.vehicleId())
@@ -45,7 +46,7 @@ public class InspectionService {
         // 4. Crear y guardar la inspección (parte matutino)
         VehicleInspection inspection = new VehicleInspection();
         inspection.setVehicle(vehicle);
-        inspection.setUserId(userId);
+        inspection.setDriver(driver);
         inspection.setKilometers(request.kilometers());
         inspection.setOdometerPhotoPath(odometerPath);
         inspection.setBeaconPhotoPath(beaconPath);

@@ -10,4 +10,5 @@ import java.util.List;
 public interface VehicleInspectionRepository extends JpaRepository<VehicleInspection, Long> {
     List<VehicleInspection> findByVehicleId(Long vehicleId);
     List<VehicleInspection> findByDriverId(Long driverId);
+    List<VehicleInspection> findByStatus(VehicleInspection.InspectionStatus status);
 }

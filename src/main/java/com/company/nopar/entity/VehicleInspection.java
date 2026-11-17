@@ -63,13 +63,6 @@ public class VehicleInspection {
     public User getDriver() { return driver; }
     public void setDriver(User driver) { this.driver = driver; }
 
-    public void setUserId(Long userId) {
-        if (this.driver == null) {
-            this.driver = new User();
-        }
-        this.driver.setId(userId);
-    }
-
     public LocalDateTime getInspectionDate() { return inspectionDate; }
     public void setInspectionDate(LocalDateTime inspectionDate) { this.inspectionDate = inspectionDate; }
 

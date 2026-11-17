@@ -50,4 +50,7 @@ public class VehicleInspectionService {
     public List<VehicleInspection> getInspectionsByDriver(Long driverId) {
         return inspectionRepository.findByDriverId(driverId);
     }
+    public List<VehicleInspection> getInspectionsByStatus(VehicleInspection.InspectionStatus status) {
+        return inspectionRepository.findByStatus(status);
+    }
 }

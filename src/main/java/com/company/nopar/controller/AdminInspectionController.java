@@ -1,5 +1,6 @@
 package com.company.nopar.controller;
 
+import com.company.nopar.dto.InspectionResponse;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.service.InspectionService;
 import lombok.RequiredArgsConstructor;
@@ -18,8 +19,8 @@ public class AdminInspectionController {
     private final InspectionService inspectionService;
 
     @GetMapping
-    public ResponseEntity<List<VehicleInspection>> getAllInspections() {
+    public ResponseEntity<List<InspectionResponse>> getAllInspections() {
         List<VehicleInspection> inspections = inspectionService.getAllInspections();
-        return ResponseEntity.ok(inspections);
+        return ResponseEntity.ok(InspectionResponse.fromAll(inspections));
     }
 }

@@ -2,13 +2,16 @@ server:
   port: 8080
 
 spring:
+  config:
+    import: optional:file:./.env[.properties]
+
   application:
     name: Nopar
 
   datasource:
     url: jdbc:postgresql://localhost:5432/fleet_db
     username: postgres
-    password: Thgmtu431333
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -29,5 +32,5 @@ spring:
 application:
   security:
     jwt:
-      secret-key: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B59703373367639792F423F4528482B4D6251655468576D5a7134
+      secret-key: ${JWT_SECRET}
       expiration: 86400000
