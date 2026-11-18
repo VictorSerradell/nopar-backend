@@ -67,7 +67,7 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    void givenValidToken_whenFilter_thenAuthenticatesWithTokenRoles() throws Exception {
+    void givenValidToken_whenFilter_thenAuthenticatesWithTheRolesFromTheDatabase() throws Exception {
         when(userDetailsService.loadUserByUsername("conductor1")).thenReturn(driver);
         String token = jwtService.generateToken(driver);
         MockFilterChain chain = new MockFilterChain();
@@ -78,6 +78,25 @@ class JwtAuthenticationFilterTest {
         assertThat(chain.getRequest()).isNotNull();
         assertThat(authentication).isNotNull();
         assertThat(authentication.getName()).isEqualTo("conductor1");
+        assertThat(authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList())
+                .containsExactly("ROLE_DRIVER");
+    }
+
+    @Test
+    void givenRoleChangedAfterTokenWasIssued_whenFilter_thenDatabaseRolesWinOverTokenClaims() throws Exception {
+        UserDetails formerAdmin = org.springframework.security.core.userdetails.User
+                .withUsername("conductor1")
+                .password("irrelevante")
+                .authorities("ROLE_ADMIN")
+                .build();
+        String tokenWithAdminClaim = jwtService.generateToken(formerAdmin);
+        when(userDetailsService.loadUserByUsername("conductor1")).thenReturn(driver); // en la BD ya es conductor
+        MockFilterChain chain = new MockFilterChain();
+
+        run(requestWithBearer(PROTECTED_PATH, tokenWithAdminClaim), chain);
+
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        assertThat(authentication).isNotNull();
         assertThat(authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList())
                 .containsExactly("ROLE_DRIVER");
     }

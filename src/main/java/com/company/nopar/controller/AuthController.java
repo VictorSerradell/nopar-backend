@@ -1,20 +1,19 @@
 package com.company.nopar.controller;
 
 import com.company.nopar.dto.AuthRequest;
-import com.company.nopar.dto.AuthResponse;
-import com.company.nopar.entity.RefreshToken;
+import com.company.nopar.dto.RefreshTokenRequest;
+import com.company.nopar.dto.TokenResponse;
 import com.company.nopar.entity.User;
-import com.company.nopar.repository.RefreshTokenRepository;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.RefreshTokenService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -26,13 +25,11 @@ public class AuthController {
 
     private final AuthenticationManager authenticationManager;
     private final UserRepository userRepository;
-    private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
-    private final RefreshTokenService refreshTokenService;         // <--- Añadido para el servicio de tokens
-    private final RefreshTokenRepository refreshTokenRepository; // <--- Añadido para el repositorio
+    private final RefreshTokenService refreshTokenService;
 
     @PostMapping("/login")
-    public ResponseEntity<?> authenticateUser(@RequestBody AuthRequest request) {
+    public ResponseEntity<TokenResponse> authenticateUser(@RequestBody AuthRequest request) {
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.username(), request.password())
         );
@@ -40,12 +37,9 @@ public class AuthController {
                 .orElseThrow(() -> new BadCredentialsException("Credenciales inválidas"));
 
         var accessToken = jwtService.generateToken(user);
-        var refreshToken = refreshTokenService.createRefreshToken(user.getUsername());
+        var refreshToken = refreshTokenService.createRefreshToken(user);
 
-        return ResponseEntity.ok(Map.of(
-                "accessToken", accessToken,
-                "refreshToken", refreshToken.getToken()
-        ));
+        return ResponseEntity.ok(new TokenResponse(accessToken, refreshToken.token()));
     }
 
     @PostMapping("/logout")
@@ -58,30 +52,12 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<?> refreshToken(@RequestBody Map<String, String> request) {
-        String requestRefreshToken = request.get("refreshToken");
+    public ResponseEntity<TokenResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest request) {
+        // Rotación: el refresh token presentado queda invalidado y se emite uno nuevo
+        var rotated = refreshTokenService.rotateRefreshToken(request.refreshToken());
 
-        // Ejecutamos la rotación y obtenemos el nuevo token de refresco
-        RefreshToken newRefreshToken = refreshTokenService.rotateRefreshToken(requestRefreshToken);
+        String accessToken = jwtService.generateToken(rotated.user());
 
-        // Generamos el nuevo Access Token para el usuario
-        String accessToken = jwtService.generateToken(newRefreshToken.getUser());
-
-        return ResponseEntity.ok(Map.of(
-                "accessToken", accessToken,
-                "refreshToken", newRefreshToken.getToken()
-        ));
-    }
-
-    @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(@RequestBody AuthRequest request) {
-        User user = new User();
-        user.setUsername(request.username());
-        user.setPassword(passwordEncoder.encode(request.password()));
-        user.setRole(User.Role.DRIVER); // Por defecto conductor
-        userRepository.save(user);
-
-        var jwtToken = jwtService.generateToken(user);
-        return ResponseEntity.ok(new AuthResponse(jwtToken));
+        return ResponseEntity.ok(new TokenResponse(accessToken, rotated.token()));
     }
 }

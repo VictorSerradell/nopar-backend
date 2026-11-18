@@ -1,59 +1,74 @@
 package com.company.nopar.service;
 
 import com.company.nopar.entity.RefreshToken;
+import com.company.nopar.entity.User;
+import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.repository.RefreshTokenRepository;
 import com.company.nopar.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.UUID;
+import java.util.Base64;
+import java.util.HexFormat;
 
+/**
+ * Emite y renueva refresh tokens. En la base de datos solo se guarda el hash SHA-256 del token:
+ * si la tabla se filtra, los hashes no sirven para abrir sesiones. El valor en claro solo se
+ * conoce en el momento de emitirlo y se entrega al cliente.
+ */
 @Service
 @RequiredArgsConstructor
 public class RefreshTokenService {
 
+    private static final Duration REFRESH_TOKEN_DURATION = Duration.ofDays(7);
+    private static final int TOKEN_BYTES = 32; // 256 bits de aleatoriedad
+    private static final String INVALID_TOKEN_MESSAGE = "Refresh token no válido o expirado";
+
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
+    private final SecureRandom secureRandom = new SecureRandom();
 
-    // 7 días de validez para el Refresh Token
-    private static final long REFRESH_TOKEN_DURATION_MS = 1000L * 60 * 60 * 24 * 7;
-
-    public RefreshToken createRefreshToken(String username) {
-        var user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + username));
-
-        RefreshToken refreshToken = new RefreshToken();
-        refreshToken.setUser(user);
-        refreshToken.setExpiryDate(Instant.now().plusMillis(REFRESH_TOKEN_DURATION_MS));
-        refreshToken.setToken(UUID.randomUUID().toString());
-
-        return refreshTokenRepository.save(refreshToken);
-    }
-
-    public RefreshToken verifyExpiration(RefreshToken token) {
-        if (token.getExpiryDate().compareTo(Instant.now()) < 0) {
-            refreshTokenRepository.delete(token);
-            throw new RuntimeException("El Refresh Token ha expirado. Por favor, inicia sesión de nuevo.");
-        }
-        return token;
-    }
+    /** Token recién emitido: {@code token} es el valor en claro para el cliente; en la BD solo queda su hash. */
+    public record IssuedRefreshToken(String token, User user) {}
 
     @Transactional
-    public RefreshToken rotateRefreshToken(String oldTokenString) {
-        // 1. Buscamos el token antiguo en la base de datos
-        RefreshToken oldToken = refreshTokenRepository.findByToken(oldTokenString)
-                .orElseThrow(() -> new RuntimeException("Refresh Token no válido o no encontrado"));
+    public IssuedRefreshToken createRefreshToken(User user) {
+        return issueFor(user);
+    }
 
-        // 2. Verificamos que no haya caducado
-        verifyExpiration(oldToken);
+    /**
+     * Rotación: el token presentado se consume (no puede volver a usarse) y se emite uno nuevo.
+     * Un token inexistente, ya consumido o caducado produce {@link InvalidRefreshTokenException} (401).
+     *
+     * noRollbackFor: si el token está caducado se borra y luego se lanza la excepción; sin esta opción
+     * la transacción se revertiría y el borrado se perdería.
+     */
+    @Transactional(noRollbackFor = InvalidRefreshTokenException.class)
+    public IssuedRefreshToken rotateRefreshToken(String presentedToken) {
+        if (presentedToken == null || presentedToken.isBlank()) {
+            throw invalidToken();
+        }
 
-        // 3. ROTACIÓN: Eliminamos el token antiguo para invalidarlo permanentemente
-        refreshTokenRepository.delete(oldToken);
+        String tokenHash = hash(presentedToken);
+        RefreshToken stored = refreshTokenRepository.findByTokenHash(tokenHash)
+                .orElseThrow(RefreshTokenService::invalidToken);
 
-        // 4. Generamos y devolvemos un nuevo par de tokens para el usuario asociado
-        return createRefreshToken(oldToken.getUser().getUsername());
+        // Consumir el token de forma atómica: si dos peticiones lo presentan a la vez, solo una lo borra
+        if (refreshTokenRepository.deleteByTokenHash(tokenHash) == 0) {
+            throw invalidToken();
+        }
+        if (stored.getExpiryDate().isBefore(Instant.now())) {
+            throw invalidToken();
+        }
+
+        return issueFor(stored.getUser());
     }
 
     @Transactional
@@ -61,5 +76,33 @@ public class RefreshTokenService {
         return userRepository.findByUsername(username)
                 .map(refreshTokenRepository::deleteByUser)
                 .orElse(0);
+    }
+
+    private IssuedRefreshToken issueFor(User user) {
+        byte[] randomBytes = new byte[TOKEN_BYTES];
+        secureRandom.nextBytes(randomBytes);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+
+        RefreshToken entity = new RefreshToken();
+        entity.setUser(user);
+        entity.setTokenHash(hash(token));
+        entity.setExpiryDate(Instant.now().plus(REFRESH_TOKEN_DURATION));
+        refreshTokenRepository.save(entity);
+
+        return new IssuedRefreshToken(token, user);
+    }
+
+    /** SHA-256 en hexadecimal. Basta un hash rápido porque el token ya tiene 256 bits de entropía. */
+    static String hash(String token) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 no está disponible en esta JVM", ex);
+        }
+    }
+
+    private static InvalidRefreshTokenException invalidToken() {
+        return new InvalidRefreshTokenException(INVALID_TOKEN_MESSAGE);
     }
 }

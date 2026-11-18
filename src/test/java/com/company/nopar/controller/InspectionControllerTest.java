@@ -1,0 +1,184 @@
+package com.company.nopar.controller;
+
+import com.company.nopar.entity.User;
+import com.company.nopar.entity.Vehicle;
+import com.company.nopar.entity.VehicleInspection;
+import com.company.nopar.exception.InvalidFileException;
+import com.company.nopar.exception.ResourceNotFoundException;
+import com.company.nopar.security.JwtService;
+import com.company.nopar.service.InspectionService;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@WebMvcTest(InspectionController.class)
+@AutoConfigureMockMvc(addFilters = false)
+class InspectionControllerTest {
+
+    private static final String VALID_DATA = """
+            {"vehicleId": 5, "kilometers": 15000,
+             "tiresOk": true, "lightsOk": true, "beaconV16Present": true,
+             "damagesReported": "Sin daños",
+             "acceptedExclusiveUse": true, "acceptedLiability": true, "acceptedCleanliness": true}
+            """;
+
+    private static final String DATA_WITHOUT_LIABILITY = """
+            {"vehicleId": 5, "kilometers": 15000,
+             "tiresOk": true, "lightsOk": true, "beaconV16Present": true,
+             "acceptedExclusiveUse": true, "acceptedLiability": false, "acceptedCleanliness": true}
+            """;
+
+    private static final String DATA_WITHOUT_CHECKLIST = """
+            {"vehicleId": 5, "kilometers": 15000,
+             "acceptedExclusiveUse": true, "acceptedLiability": true, "acceptedCleanliness": true}
+            """;
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private InspectionService inspectionService;
+
+    @MockitoBean
+    private JwtService jwtService;
+
+    @Test
+    void givenValidRequest_whenCreateInspection_thenCreatedWithoutServerPathsNorDriverEntity() throws Exception {
+        when(inspectionService.createInspection(any(), any(), any(), any(), any())).thenReturn(savedInspection());
+
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(VALID_DATA))
+                        .file(odometerPhoto()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(1))
+                .andExpect(jsonPath("$.vehicleLicensePlate").value("1234-ABC"))
+                .andExpect(jsonPath("$.driverUsername").value("conductor1"))
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.tiresOk").value(true))
+                .andExpect(jsonPath("$.driver").doesNotExist())
+                .andExpect(jsonPath("$.odometerPhotoPath").doesNotExist())
+                .andExpect(jsonPath("$..password").isEmpty());
+    }
+
+    @Test
+    void givenRejectedPhoto_whenCreateInspection_thenBadRequestWithProblemDetail() throws Exception {
+        when(inspectionService.createInspection(any(), any(), any(), any(), any()))
+                .thenThrow(new InvalidFileException("Formato de archivo no permitido. Solo se aceptan imágenes JPEG y PNG."));
+
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(VALID_DATA))
+                        .file(odometerPhoto()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Archivo no válido"))
+                .andExpect(jsonPath("$.detail").value("Formato de archivo no permitido. Solo se aceptan imágenes JPEG y PNG."));
+    }
+
+    @Test
+    void givenUnknownVehicle_whenCreateInspection_thenNotFound() throws Exception {
+        when(inspectionService.createInspection(any(), any(), any(), any(), any()))
+                .thenThrow(new ResourceNotFoundException("Vehículo no encontrado con ID: 5"));
+
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(VALID_DATA))
+                        .file(odometerPhoto()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
+    }
+
+    @Test
+    void givenLiabilityNotAccepted_whenCreateInspection_thenBadRequestWithFieldErrors() throws Exception {
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(DATA_WITHOUT_LIABILITY))
+                        .file(odometerPhoto()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Datos no válidos"))
+                .andExpect(jsonPath("$.errors.acceptedLiability").exists());
+
+        verifyNoInteractions(inspectionService);
+    }
+
+    @Test
+    void givenMissingChecklist_whenCreateInspection_thenBadRequestWithFieldErrors() throws Exception {
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(DATA_WITHOUT_CHECKLIST))
+                        .file(odometerPhoto()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.tiresOk").exists())
+                .andExpect(jsonPath("$.errors.lightsOk").exists())
+                .andExpect(jsonPath("$.errors.beaconV16Present").exists());
+
+        verifyNoInteractions(inspectionService);
+    }
+
+    @Test
+    void givenInspections_whenGetByVehicle_thenReturnsPageWithPublicView() throws Exception {
+        when(inspectionService.getInspectionsByVehicle(5L, 0, 20))
+                .thenReturn(new PageImpl<>(List.of(savedInspection()), PageRequest.of(0, 20), 1));
+
+        mockMvc.perform(get("/api/v1/inspections/vehicle/5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].vehicleLicensePlate").value("1234-ABC"))
+                .andExpect(jsonPath("$.content[0].driver").doesNotExist())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$..password").isEmpty());
+    }
+
+    @Test
+    void givenSizeAboveTheLimit_whenGetByVehicle_thenBadRequest() throws Exception {
+        mockMvc.perform(get("/api/v1/inspections/vehicle/5").param("size", "1000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Datos no válidos"));
+
+        verifyNoInteractions(inspectionService);
+    }
+
+    private static MockMultipartFile data(String json) {
+        return new MockMultipartFile("data", "", MediaType.APPLICATION_JSON_VALUE, json.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static MockMultipartFile odometerPhoto() {
+        return new MockMultipartFile("odometerPhoto", "odo.jpg", "image/jpeg", new byte[]{1, 2, 3});
+    }
+
+    private static VehicleInspection savedInspection() {
+        Vehicle vehicle = new Vehicle();
+        vehicle.setId(5L);
+        vehicle.setLicensePlate("1234-ABC");
+
+        User driver = new User();
+        driver.setId(7L);
+        driver.setUsername("conductor1");
+        driver.setPassword("$2a$10$hash-que-no-debe-salir");
+        driver.setRole(User.Role.DRIVER);
+
+        VehicleInspection inspection = new VehicleInspection();
+        inspection.setId(1L);
+        inspection.setVehicle(vehicle);
+        inspection.setDriver(driver);
+        inspection.setKilometers(15000);
+        inspection.setTiresOk(true);
+        inspection.setLightsOk(true);
+        inspection.setBeaconV16Present(true);
+        inspection.setOdometerPhotoPath("odo.jpg");
+        inspection.setStatus(VehicleInspection.InspectionStatus.APPROVED);
+        return inspection;
+    }
+}

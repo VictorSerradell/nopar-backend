@@ -17,6 +17,9 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
+    # Sin sesión abierta durante el render de la respuesta: toda lectura de relaciones perezosas
+    # ocurre dentro del servicio (transacción) o se trae con @EntityGraph
+    open-in-view: false
     show-sql: true
     properties:
       hibernate:
@@ -28,9 +31,18 @@ spring:
       max-file-size: 10MB
       max-request-size: 50MB
 
-# Configuración JWT anidada correctamente en YAML
+# Configuración propia de la aplicación
 application:
+  storage:
+    # Carpeta donde se guardan las fotos de las inspecciones (en producción, una ruta fuera del proyecto)
+    location: uploads/inspections
+  bootstrap:
+    admin:
+      # Solo se usan si no existe ningún administrador; tras el primer arranque pueden quitarse
+      username: ${ADMIN_USERNAME:}
+      password: ${ADMIN_PASSWORD:}
   security:
     jwt:
       secret-key: ${JWT_SECRET}
-      expiration: 86400000
+      # 15 minutos: la sesión larga la mantiene el refresh token (7 días)
+      expiration: 900000

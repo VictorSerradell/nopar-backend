@@ -6,6 +6,7 @@ import com.company.nopar.entity.VehicleInspection;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.RecordComponent;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 
@@ -57,13 +58,32 @@ class InspectionResponseTest {
     }
 
     @Test
+    void givenReviewedInspection_whenFrom_thenIncludesReviewerUsernameAndDate() {
+        VehicleInspection inspection = fullInspection();
+        User admin = new User();
+        admin.setId(1L);
+        admin.setUsername("admin");
+        admin.setPassword("$2a$10$otro-hash-que-no-debe-salir");
+        admin.setRole(User.Role.ADMIN);
+        LocalDateTime reviewedAt = LocalDateTime.of(2026, 11, 18, 9, 30);
+        inspection.setReviewedBy(admin);
+        inspection.setReviewedAt(reviewedAt);
+
+        InspectionResponse response = InspectionResponse.from(inspection);
+
+        assertThat(response.reviewedByUsername()).isEqualTo("admin");
+        assertThat(response.reviewedAt()).isEqualTo(reviewedAt);
+        assertThat(response.toString()).doesNotContain("otro-hash-que-no-debe-salir");
+    }
+
+    @Test
     void response_doesNotDeclareEntitiesNorSensitiveComponents() {
         List<String> components = Arrays.stream(InspectionResponse.class.getRecordComponents())
                 .map(RecordComponent::getName)
                 .toList();
 
         assertThat(components).doesNotContain(
-                "driver", "vehicle", "password",
+                "driver", "vehicle", "reviewedBy", "password",
                 "odometerPhotoPath", "beaconPhotoPath", "exteriorPhotosPath");
     }
 

@@ -10,8 +10,8 @@ import java.time.Instant;
 
 @Entity
 @Table(name = "refresh_tokens")
-@Getter // <--- Imprescindible para generar getExpiryDate(), getUser(), etc.
-@Setter // <--- Imprescindible para setUser(), setToken(), etc.
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 public class RefreshToken {
@@ -20,8 +20,12 @@ public class RefreshToken {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
-    private String token;
+    /**
+     * Hash SHA-256 del token, nunca el token en claro. Se mantiene el nombre de columna "token"
+     * para no tener que migrar el esquema.
+     */
+    @Column(name = "token", nullable = false, unique = true)
+    private String tokenHash;
 
     @Column(nullable = false)
     private Instant expiryDate;

@@ -24,12 +24,15 @@ public record InspectionResponse(
         Boolean acceptedExclusiveUse,
         Boolean acceptedLiability,
         Boolean acceptedCleanliness,
-        VehicleInspection.InspectionStatus status
+        VehicleInspection.InspectionStatus status,
+        String reviewedByUsername,
+        LocalDateTime reviewedAt
 ) {
 
     public static InspectionResponse from(VehicleInspection inspection) {
         var vehicle = inspection.getVehicle();
         var driver = inspection.getDriver();
+        var reviewer = inspection.getReviewedBy();
         return new InspectionResponse(
                 inspection.getId(),
                 vehicle != null ? vehicle.getId() : null,
@@ -45,7 +48,9 @@ public record InspectionResponse(
                 inspection.getAcceptedExclusiveUse(),
                 inspection.getAcceptedLiability(),
                 inspection.getAcceptedCleanliness(),
-                inspection.getStatus()
+                inspection.getStatus(),
+                reviewer != null ? reviewer.getUsername() : null,
+                inspection.getReviewedAt()
         );
     }
 

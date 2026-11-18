@@ -35,7 +35,8 @@ public class JwtService {
         return claimsResolver.apply(claims);
     }
 
-    // Generar token incluyendo los roles en las claims
+    // Los roles van en las claims solo como información para los clientes (p. ej. mostrar u ocultar pantallas).
+    // El servidor autoriza con los roles de la base de datos (ver JwtAuthenticationFilter).
     public String generateToken(UserDetails userDetails) {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put("roles", userDetails.getAuthorities().stream()

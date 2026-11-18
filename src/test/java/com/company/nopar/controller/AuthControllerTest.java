@@ -1,12 +1,12 @@
 package com.company.nopar.controller;
 
 import com.company.nopar.dto.AuthRequest;
-import com.company.nopar.entity.RefreshToken;
 import com.company.nopar.entity.User;
-import com.company.nopar.repository.RefreshTokenRepository;
+import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.RefreshTokenService;
+import com.company.nopar.service.RefreshTokenService.IssuedRefreshToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,14 +16,13 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.Instant;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -46,36 +45,28 @@ class AuthControllerTest {
     private UserRepository userRepository;
 
     @MockitoBean
-    private PasswordEncoder passwordEncoder;
-
-    @MockitoBean
     private JwtService jwtService;
 
     @MockitoBean
     private RefreshTokenService refreshTokenService;
 
-    @MockitoBean
-    private RefreshTokenRepository refreshTokenRepository;
-
     @Test
     void testLoginSuccess() throws Exception {
         AuthRequest request = new AuthRequest("conductor1", "password123");
 
-        User mockUser = new User();
-        mockUser.setId(1L);
-        mockUser.setUsername("conductor1");
-        mockUser.setRole(User.Role.DRIVER);
-
-        RefreshToken mockRefreshToken = new RefreshToken(1L, "mock-refresh-token", Instant.now().plusSeconds(3600), mockUser);
+        User mockUser = driver();
 
         when(userRepository.findByUsername("conductor1")).thenReturn(Optional.of(mockUser));
         when(jwtService.generateToken(any(User.class))).thenReturn("mock-jwt-access-token");
-        when(refreshTokenService.createRefreshToken("conductor1")).thenReturn(mockRefreshToken);
+        when(refreshTokenService.createRefreshToken(any(User.class)))
+                .thenReturn(new IssuedRefreshToken("mock-refresh-token", mockUser));
 
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").value("mock-jwt-access-token"))
+                .andExpect(jsonPath("$.refreshToken").value("mock-refresh-token"));
     }
 
     @Test
@@ -111,5 +102,59 @@ class AuthControllerTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.title").value("No autorizado"));
+    }
+
+    @Test
+    void givenValidRefreshToken_whenRefresh_thenReturnsNewAccessAndRefreshTokens() throws Exception {
+        when(refreshTokenService.rotateRefreshToken("old-refresh-token"))
+                .thenReturn(new IssuedRefreshToken("new-refresh-token", driver()));
+        when(jwtService.generateToken(any(User.class))).thenReturn("new-access-token");
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken": "old-refresh-token"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").value("new-access-token"))
+                .andExpect(jsonPath("$.refreshToken").value("new-refresh-token"));
+    }
+
+    @Test
+    void givenInvalidRefreshToken_whenRefresh_thenUnauthorizedInsteadOfServerError() throws Exception {
+        when(refreshTokenService.rotateRefreshToken("caducado"))
+                .thenThrow(new InvalidRefreshTokenException("Refresh token no válido o expirado"));
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken": "caducado"}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.title").value("No autorizado"))
+                .andExpect(jsonPath("$.detail").value("Refresh token no válido o expirado"));
+    }
+
+    @Test
+    void givenBlankRefreshToken_whenRefresh_thenBadRequest() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken": "  "}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Datos no válidos"))
+                .andExpect(jsonPath("$.errors.refreshToken").value("El refresh token es obligatorio"));
+
+        verifyNoInteractions(refreshTokenService);
+    }
+
+    private static User driver() {
+        User user = new User();
+        user.setId(1L);
+        user.setUsername("conductor1");
+        user.setRole(User.Role.DRIVER);
+        return user;
     }
 }

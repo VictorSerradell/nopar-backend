@@ -9,7 +9,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -19,9 +18,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -31,7 +28,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     /** Rutas públicas (las mismas que permitAll en SecurityConfig): no se les aplica el filtro. */
     private static final Set<String> PUBLIC_PATHS = Set.of(
             "/api/v1/auth/login",
-            "/api/v1/auth/register",
             "/api/v1/auth/refresh"
     );
 
@@ -66,20 +62,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
 
                 if (jwtService.isTokenValid(jwt, userDetails)) {
-                    // Extraer los roles directamente de las claims del token JWT
-                    List<String> roles = jwtService.extractClaim(jwt, claims -> claims.get("roles", List.class));
-                    if (roles == null) {
-                        roles = List.of();
-                    }
-
-                    List<SimpleGrantedAuthority> authorities = roles.stream()
-                            .map(SimpleGrantedAuthority::new)
-                            .collect(Collectors.toList());
-
+                    // Los roles salen de la BD (userDetails), no del token: un cambio de rol se aplica
+                    // de inmediato en vez de esperar a que caduque el token ya emitido.
                     UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                             userDetails,
                             null,
-                            authorities // Aquí se inyectan formalmente los roles válidos para @PreAuthorize
+                            userDetails.getAuthorities()
                     );
 
                     authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));

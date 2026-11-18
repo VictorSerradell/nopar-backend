@@ -2,28 +2,32 @@ package com.company.nopar.controller;
 
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionResponse;
+import com.company.nopar.dto.PageResponse;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.service.InspectionService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/inspections")
 @RequiredArgsConstructor
-@Validated
 public class InspectionController {
 
     private final InspectionService inspectionService;
 
+    /** Alta del parte de inspección: datos y checklist en la parte "data" (JSON) y las fotos como ficheros. */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
     public ResponseEntity<InspectionResponse> createInspection(
             @Valid @RequestPart("data") InspectionCreateRequest request,
             @RequestPart("odometerPhoto") MultipartFile odometerPhoto,
@@ -35,5 +39,31 @@ public class InspectionController {
                 request, odometerPhoto, beaconPhoto, exteriorPhoto, currentUser
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(InspectionResponse.from(savedInspection));
+    }
+
+    @GetMapping("/vehicle/{vehicleId}")
+    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
+    public ResponseEntity<PageResponse<InspectionResponse>> getInspectionsByVehicle(
+            @PathVariable Long vehicleId,
+            @RequestParam(defaultValue = PageResponse.DEFAULT_PAGE)
+            @Min(value = 0, message = PageResponse.PAGE_MIN_MESSAGE) int page,
+            @RequestParam(defaultValue = PageResponse.DEFAULT_SIZE)
+            @Min(value = 1, message = PageResponse.SIZE_MIN_MESSAGE)
+            @Max(value = PageResponse.MAX_SIZE, message = PageResponse.SIZE_MAX_MESSAGE) int size) {
+        return ResponseEntity.ok(PageResponse.of(
+                inspectionService.getInspectionsByVehicle(vehicleId, page, size), InspectionResponse::from));
+    }
+
+    @GetMapping("/driver/me")
+    @PreAuthorize("hasRole('DRIVER')")
+    public ResponseEntity<PageResponse<InspectionResponse>> getMyInspections(
+            @AuthenticationPrincipal User currentUser,
+            @RequestParam(defaultValue = PageResponse.DEFAULT_PAGE)
+            @Min(value = 0, message = PageResponse.PAGE_MIN_MESSAGE) int page,
+            @RequestParam(defaultValue = PageResponse.DEFAULT_SIZE)
+            @Min(value = 1, message = PageResponse.SIZE_MIN_MESSAGE)
+            @Max(value = PageResponse.MAX_SIZE, message = PageResponse.SIZE_MAX_MESSAGE) int size) {
+        return ResponseEntity.ok(PageResponse.of(
+                inspectionService.getInspectionsByDriver(currentUser.getId(), page, size), InspectionResponse::from));
     }
 }

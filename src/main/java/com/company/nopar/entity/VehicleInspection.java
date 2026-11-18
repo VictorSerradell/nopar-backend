@@ -5,7 +5,17 @@ import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "vehicle_inspections")
+@NamedEntityGraph(
+        name = VehicleInspection.WITH_DETAILS,
+        attributeNodes = {
+                @NamedAttributeNode("vehicle"),
+                @NamedAttributeNode("driver"),
+                @NamedAttributeNode("reviewedBy")
+        })
 public class VehicleInspection {
+
+    /** Grafo que trae vehículo, conductor y revisor en la misma consulta (evita el N+1 al listar). */
+    public static final String WITH_DETAILS = "VehicleInspection.withDetails";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -45,6 +55,13 @@ public class VehicleInspection {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private InspectionStatus status;
+
+    // Trazabilidad de la revisión: se rellenan solo cuando un administrador aprueba o rechaza
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reviewed_by")
+    private User reviewedBy;
+
+    private LocalDateTime reviewedAt;
 
     public enum InspectionStatus {
         SUBMITTED, APPROVED, REJECTED
@@ -101,4 +118,10 @@ public class VehicleInspection {
 
     public InspectionStatus getStatus() { return status; }
     public void setStatus(InspectionStatus status) { this.status = status; }
+
+    public User getReviewedBy() { return reviewedBy; }
+    public void setReviewedBy(User reviewedBy) { this.reviewedBy = reviewedBy; }
+
+    public LocalDateTime getReviewedAt() { return reviewedAt; }
+    public void setReviewedAt(LocalDateTime reviewedAt) { this.reviewedAt = reviewedAt; }
 }
