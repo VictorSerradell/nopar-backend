@@ -24,7 +24,13 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("delete from RefreshToken t where t.tokenHash = :tokenHash")
     int deleteByTokenHash(@Param("tokenHash") String tokenHash);
 
-    int deleteByUser(User user);
+    /**
+     * Borra de una sola sentencia todos los tokens del usuario (cerrar sesión en todos los dispositivos);
+     * devuelve cuántos. Un método derivado cargaría cada token y los borraría de uno en uno.
+     */
+    @Modifying
+    @Query("delete from RefreshToken t where t.user = :user")
+    int deleteByUser(@Param("user") User user);
 
     /** Borra de una sola sentencia todos los tokens que caducaron antes de {@code now}; devuelve cuántos. */
     @Modifying

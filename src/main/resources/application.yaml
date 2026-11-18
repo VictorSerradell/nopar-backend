@@ -26,7 +26,6 @@ spring:
     properties:
       hibernate:
         format_sql: true
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
 
   flyway:
     # La BD que ya existía (creada antes con ddl-auto=update) se toma como la versión 1 del esquema;
