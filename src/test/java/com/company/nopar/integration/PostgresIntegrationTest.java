@@ -13,6 +13,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.entity.VehicleReturn;
 import com.company.nopar.exception.InvalidKilometersException;
+import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.repository.RefreshTokenRepository;
@@ -454,6 +455,40 @@ class PostgresIntegrationTest {
         assertThat(statusOf(inMaintenance)).isEqualTo(Vehicle.VehicleStatus.MAINTENANCE);
         assertThat(statusOf(available)).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
         assertThat(vehicleService.releaseVehiclesInUse()).isZero();
+    }
+
+    // ------------------------------------------------------------------ cierre de sesión
+
+    @Test
+    void logoutRevokesOnlyThePresentedRefreshTokenAndLogoutAllRevokesEveryOne() throws Exception {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        String phone = refreshTokenService.createRefreshToken(driver).token();
+        String tablet = refreshTokenService.createRefreshToken(driver).token();
+        String laptop = refreshTokenService.createRefreshToken(driver).token();
+        assertThat(refreshTokenRepository.count()).isEqualTo(3);
+
+        // Cerrar la sesión del móvil no exige access token: el refresh token es la credencial
+        String logoutPhone = "{\"refreshToken\": \"" + phone + "\"}";
+        mockMvc.perform(post("/api/v1/auth/logout").contentType(MediaType.APPLICATION_JSON).content(logoutPhone))
+                .andExpect(status().isNoContent());
+        assertThat(refreshTokenRepository.count()).isEqualTo(2);
+        assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(phone))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        // Repetirlo no falla ni revela nada, y las otras sesiones siguen abiertas
+        mockMvc.perform(post("/api/v1/auth/logout").contentType(MediaType.APPLICATION_JSON).content(logoutPhone))
+                .andExpect(status().isNoContent());
+        assertThat(refreshTokenRepository.count()).isEqualTo(2);
+        assertThat(refreshTokenService.rotateRefreshToken(tablet).user().getUsername()).isEqualTo("driver1");
+
+        // Cerrar todas las sesiones sí exige estar autenticado
+        mockMvc.perform(post("/api/v1/auth/logout-all")).andExpect(status().isUnauthorized());
+        assertThat(refreshTokenRepository.count()).isEqualTo(2);
+
+        mockMvc.perform(post("/api/v1/auth/logout-all").with(user(driver))).andExpect(status().isNoContent());
+        assertThat(refreshTokenRepository.count()).isZero();
+        assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(laptop))
+                .isInstanceOf(InvalidRefreshTokenException.class);
     }
 
     // ------------------------------------------------------------------ limpieza de refresh tokens

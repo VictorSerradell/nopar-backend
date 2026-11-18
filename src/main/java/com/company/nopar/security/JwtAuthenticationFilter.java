@@ -28,7 +28,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     /** Rutas públicas (las mismas que permitAll en SecurityConfig): no se les aplica el filtro. */
     private static final Set<String> PUBLIC_PATHS = Set.of(
             "/api/v1/auth/login",
-            "/api/v1/auth/refresh"
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout"
     );
 
     private final JwtService jwtService;

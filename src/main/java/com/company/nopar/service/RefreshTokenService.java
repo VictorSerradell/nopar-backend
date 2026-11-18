@@ -71,6 +71,19 @@ public class RefreshTokenService {
         return issueFor(stored.getUser());
     }
 
+    /**
+     * Cierra la sesión de un solo dispositivo: borra el refresh token presentado. No falla si no existe
+     * (ya revocado, caducado o inventado): repetirlo es inofensivo y no revela si el token era válido.
+     */
+    @Transactional
+    public void revokeRefreshToken(String refreshToken) {
+        refreshTokenRepository.deleteByTokenHash(hash(refreshToken));
+    }
+
+    /**
+     * Cierra la sesión en todos los dispositivos: borra todos los refresh tokens del usuario.
+     * Los access tokens ya emitidos siguen valiendo hasta que caduquen.
+     */
     @Transactional
     public int deleteByUser(String username) {
         return userRepository.findByUsername(username)

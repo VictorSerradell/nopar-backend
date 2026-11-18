@@ -16,8 +16,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Map;
-
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
@@ -42,13 +40,25 @@ public class AuthController {
         return ResponseEntity.ok(new TokenResponse(accessToken, refreshToken.token()));
     }
 
+    /**
+     * Cierra la sesión de este dispositivo: revoca solo el refresh token presentado, y las sesiones del mismo
+     * usuario en otros dispositivos siguen abiertas. No exige access token (puede haber caducado, dura 15 minutos):
+     * el refresh token es la credencial, igual que en /refresh. Responde 204 aunque el token ya no existiera.
+     */
     @PostMapping("/logout")
-    public ResponseEntity<?> logout(@AuthenticationPrincipal User currentUser) {
-        if (currentUser != null) {
-            // Eliminamos todos los refresh tokens asociados a este usuario en la base de datos
-            refreshTokenService.deleteByUser(currentUser.getUsername());
-        }
-        return ResponseEntity.ok(Map.of("message", "Sesión cerrada correctamente. Refresh tokens revocados."));
+    public ResponseEntity<Void> logout(@Valid @RequestBody RefreshTokenRequest request) {
+        refreshTokenService.revokeRefreshToken(request.refreshToken());
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Cierra la sesión en todos los dispositivos: revoca todos los refresh tokens del usuario autenticado.
+     * Los access tokens ya emitidos siguen valiendo hasta que caduquen (15 minutos), pero ya no se pueden renovar.
+     */
+    @PostMapping("/logout-all")
+    public ResponseEntity<Void> logoutAll(@AuthenticationPrincipal User currentUser) {
+        refreshTokenService.deleteByUser(currentUser.getUsername());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/refresh")

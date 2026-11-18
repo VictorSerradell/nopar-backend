@@ -22,6 +22,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -145,6 +147,32 @@ class AuthControllerTest {
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.title").value("Datos no válidos"))
+                .andExpect(jsonPath("$.errors.refreshToken").value("El refresh token es obligatorio"));
+
+        verifyNoInteractions(refreshTokenService);
+    }
+
+    @Test
+    void givenRefreshToken_whenLogout_thenNoContentAndOnlyThatTokenIsRevoked() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken": "token-del-movil"}
+                                """))
+                .andExpect(status().isNoContent());
+
+        verify(refreshTokenService).revokeRefreshToken("token-del-movil");
+        verify(refreshTokenService, never()).deleteByUser(any());
+    }
+
+    @Test
+    void givenBlankRefreshToken_whenLogout_thenBadRequest() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken": ""}
+                                """))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.refreshToken").value("El refresh token es obligatorio"));
 
         verifyNoInteractions(refreshTokenService);

@@ -149,6 +149,15 @@ class RefreshTokenServiceTest {
     }
 
     @Test
+    void givenRefreshToken_whenRevoke_thenDeletesItByHashAndNeverByItsRawValue() {
+        service.revokeRefreshToken("token-del-movil");
+
+        verify(refreshTokenRepository).deleteByTokenHash(RefreshTokenService.hash("token-del-movil"));
+        verify(refreshTokenRepository, never()).deleteByUser(any());
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
     void givenExpiredTokens_whenDeleteExpiredTokens_thenDeletesTheOnesBeforeNowAndReturnsHowMany() {
         when(refreshTokenRepository.deleteExpiredBefore(any(Instant.class))).thenReturn(3);
         Instant before = Instant.now();
