@@ -1,9 +1,11 @@
 package com.company.nopar.service;
 
 import com.company.nopar.exception.InvalidFileException;
+import com.company.nopar.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.IOException;
@@ -96,5 +98,55 @@ class FileStorageServiceTest {
         service.delete(null);
 
         assertThat(outside).exists();
+    }
+
+    // ------------------------------------------------------------ lectura
+
+    @Test
+    void givenStoredJpeg_whenLoad_thenReturnsItsBytesAndImageJpeg() throws IOException {
+        String name = service.storeFile(new MockMultipartFile("f", "foto.jpg", "image/jpeg", JPEG));
+
+        FileStorageService.StoredFile stored = service.load(name);
+
+        assertThat(stored.mediaType()).isEqualTo(MediaType.IMAGE_JPEG);
+        assertThat(stored.resource().getContentAsByteArray()).isEqualTo(JPEG);
+    }
+
+    @Test
+    void givenStoredPng_whenLoad_thenReturnsImagePng() {
+        String name = service.storeFile(new MockMultipartFile("f", "foto.png", "image/png", PNG));
+
+        assertThat(service.load(name).mediaType()).isEqualTo(MediaType.IMAGE_PNG);
+    }
+
+    @Test
+    void givenFileWithAnotherExtension_whenLoad_thenOctetStream() throws IOException {
+        Files.createDirectories(storageDir);
+        Files.write(storageDir.resolve("raro.bin"), JPEG);
+
+        assertThat(service.load("raro.bin").mediaType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+    }
+
+    @Test
+    void givenUnknownFile_whenLoad_thenNotFound() {
+        assertThatThrownBy(() -> service.load("no-existe.jpg")).isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void givenNameOutsideStorage_whenLoad_thenNotFoundEvenIfTheFileExists() throws IOException {
+        Files.write(tempDir.resolve("secret.jpg"), JPEG);
+
+        assertThatThrownBy(() -> service.load("../secret.jpg")).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.load(tempDir.resolve("secret.jpg").toString()))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void givenNullEmptyOrFolderName_whenLoad_thenNotFound() throws IOException {
+        Files.createDirectories(storageDir);
+
+        assertThatThrownBy(() -> service.load(null)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.load("")).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.load(".")).isInstanceOf(ResourceNotFoundException.class);
     }
 }

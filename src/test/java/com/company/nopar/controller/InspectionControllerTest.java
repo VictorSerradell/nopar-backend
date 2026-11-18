@@ -1,5 +1,6 @@
 package com.company.nopar.controller;
 
+import com.company.nopar.entity.InspectionPhotoType;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
@@ -8,11 +9,13 @@ import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.security.JwtService;
+import com.company.nopar.service.FileStorageService;
 import com.company.nopar.service.InspectionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -21,9 +24,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.nio.charset.StandardCharsets;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -73,6 +80,8 @@ class InspectionControllerTest {
                 .andExpect(jsonPath("$.tiresOk").value(true))
                 .andExpect(jsonPath("$.driver").doesNotExist())
                 .andExpect(jsonPath("$.odometerPhotoPath").doesNotExist())
+                .andExpect(jsonPath("$.odometerPhotoUrl").value("/api/v1/inspections/1/photos/odometer"))
+                .andExpect(jsonPath("$.beaconPhotoUrl").doesNotExist())
                 .andExpect(jsonPath("$..password").isEmpty());
     }
 
@@ -152,6 +161,41 @@ class InspectionControllerTest {
                 .andExpect(jsonPath("$.errors.beaconV16Present").exists());
 
         verifyNoInteractions(inspectionService);
+    }
+
+    // ------------------------------------------------------------ fotos del parte
+
+    @Test
+    void givenStoredPhoto_whenGetPhoto_thenImageBytesWithItsTypeAndPrivateCache() throws Exception {
+        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 1, 2, 3};
+        when(inspectionService.getPhoto(eq(1L), eq(InspectionPhotoType.ODOMETER), any()))
+                .thenReturn(new FileStorageService.StoredFile(new ByteArrayResource(jpeg), MediaType.IMAGE_JPEG));
+
+        mockMvc.perform(get("/api/v1/inspections/1/photos/odometer"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.IMAGE_JPEG))
+                .andExpect(content().bytes(jpeg))
+                .andExpect(header().string("Cache-Control", "max-age=3600, private"));
+    }
+
+    @Test
+    void givenUnknownPhotoType_whenGetPhoto_thenNotFoundWithoutTouchingTheService() throws Exception {
+        mockMvc.perform(get("/api/v1/inspections/1/photos/passport"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
+
+        verifyNoInteractions(inspectionService);
+    }
+
+    @Test
+    void givenMissingPhoto_whenGetPhoto_thenNotFoundWithProblemDetail() throws Exception {
+        when(inspectionService.getPhoto(eq(1L), eq(InspectionPhotoType.BEACON), any()))
+                .thenThrow(new ResourceNotFoundException("La inspección 1 no tiene foto de tipo beacon"));
+
+        mockMvc.perform(get("/api/v1/inspections/1/photos/beacon"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Recurso no encontrado"))
+                .andExpect(jsonPath("$.detail").value("La inspección 1 no tiene foto de tipo beacon"));
     }
 
     private static MockMultipartFile data(String json) {

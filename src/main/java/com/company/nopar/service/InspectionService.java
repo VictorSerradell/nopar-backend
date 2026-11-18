@@ -2,6 +2,7 @@ package com.company.nopar.service;
 
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionReviewRequest;
+import com.company.nopar.entity.InspectionPhotoType;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
@@ -15,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -24,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -139,6 +142,26 @@ public class InspectionService {
         return inspectionRepository.save(inspection);
     }
 
+    /**
+     * Una de las fotos de un parte. La ve un administrador o el conductor que hizo el parte; cualquier otro
+     * usuario recibe 403 (AccessDeniedException llega a Spring Security, igual que con @PreAuthorize).
+     * 404 si el parte no existe o no tiene esa foto, o si el fichero ya no está en el disco.
+     */
+    @Transactional(readOnly = true)
+    public FileStorageService.StoredFile getPhoto(Long inspectionId, InspectionPhotoType type, User actor) {
+        VehicleInspection inspection = inspectionRepository.findWithDetailsById(inspectionId)
+                .orElseThrow(() -> new ResourceNotFoundException("Inspección no encontrada con ID: " + inspectionId));
+
+        requireAuthorOrAdmin(inspection, actor);
+
+        String storedName = type.storedNameOf(inspection);
+        if (storedName == null) {
+            throw new ResourceNotFoundException(
+                    "La inspección " + inspectionId + " no tiene foto de tipo " + type.slug());
+        }
+        return fileStorageService.load(storedName);
+    }
+
     @Transactional(readOnly = true)
     public Page<VehicleInspection> getAllInspections(int page, int size) {
         return inspectionRepository.findAll(newestFirst(page, size));
@@ -157,6 +180,17 @@ public class InspectionService {
     @Transactional(readOnly = true)
     public Page<VehicleInspection> getInspectionsByStatus(VehicleInspection.InspectionStatus status, int page, int size) {
         return inspectionRepository.findByStatus(status, newestFirst(page, size));
+    }
+
+    private static void requireAuthorOrAdmin(VehicleInspection inspection, User actor) {
+        if (actor.getRole() == User.Role.ADMIN) {
+            return;
+        }
+        User author = inspection.getDriver();
+        if (author == null || !Objects.equals(author.getId(), actor.getId())) {
+            throw new AccessDeniedException(
+                    "Solo el conductor que hizo el parte, o un administrador, puede ver sus fotos");
+        }
     }
 
     private static PageRequest newestFirst(int page, int size) {

@@ -2,6 +2,7 @@ package com.company.nopar.service;
 
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionReviewRequest.Decision;
+import com.company.nopar.entity.InspectionPhotoType;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
@@ -22,8 +23,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -338,7 +342,83 @@ class InspectionServiceTest {
         assertThat(inspectionService.getInspectionsByStatus(InspectionStatus.SUBMITTED, 0, 50)).isSameAs(page);
     }
 
+    // ------------------------------------------------------------ fotos del parte
+
+    @Test
+    void givenTheAuthor_whenGetPhoto_thenLoadsTheStoredFile() {
+        User author = userWithRole(7L, User.Role.DRIVER);
+        when(inspectionRepository.findWithDetailsById(1L)).thenReturn(Optional.of(inspectionWithOdometer(1L, author)));
+        FileStorageService.StoredFile stored = storedJpeg();
+        when(fileStorageService.load("odo.jpg")).thenReturn(stored);
+
+        assertThat(inspectionService.getPhoto(1L, InspectionPhotoType.ODOMETER, author)).isSameAs(stored);
+    }
+
+    @Test
+    void givenAnAdmin_whenGetPhotoOfAnotherDriver_thenLoadsTheStoredFile() {
+        User author = userWithRole(7L, User.Role.DRIVER);
+        User admin = userWithRole(1L, User.Role.ADMIN);
+        when(inspectionRepository.findWithDetailsById(1L)).thenReturn(Optional.of(inspectionWithOdometer(1L, author)));
+        FileStorageService.StoredFile stored = storedJpeg();
+        when(fileStorageService.load("odo.jpg")).thenReturn(stored);
+
+        assertThat(inspectionService.getPhoto(1L, InspectionPhotoType.ODOMETER, admin)).isSameAs(stored);
+    }
+
+    @Test
+    void givenAnotherDriver_whenGetPhoto_thenAccessDeniedAndTheFileIsNotRead() {
+        User author = userWithRole(7L, User.Role.DRIVER);
+        User other = userWithRole(8L, User.Role.DRIVER);
+        when(inspectionRepository.findWithDetailsById(1L)).thenReturn(Optional.of(inspectionWithOdometer(1L, author)));
+
+        assertThatThrownBy(() -> inspectionService.getPhoto(1L, InspectionPhotoType.ODOMETER, other))
+                .isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(fileStorageService);
+    }
+
+    @Test
+    void givenUnknownInspection_whenGetPhoto_thenNotFound() {
+        when(inspectionRepository.findWithDetailsById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> inspectionService.getPhoto(99L, InspectionPhotoType.ODOMETER, userWithRole(1L, User.Role.ADMIN)))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+
+        verifyNoInteractions(fileStorageService);
+    }
+
+    @Test
+    void givenInspectionWithoutThatPhoto_whenGetPhoto_thenNotFound() {
+        User author = userWithRole(7L, User.Role.DRIVER);
+        when(inspectionRepository.findWithDetailsById(1L)).thenReturn(Optional.of(inspectionWithOdometer(1L, author)));
+
+        assertThatThrownBy(() -> inspectionService.getPhoto(1L, InspectionPhotoType.BEACON, author))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("beacon");
+
+        verifyNoInteractions(fileStorageService);
+    }
+
     // ------------------------------------------------------------ utilidades
+
+    private static User userWithRole(Long id, User.Role role) {
+        User user = new User();
+        user.setId(id);
+        user.setRole(role);
+        return user;
+    }
+
+    private static VehicleInspection inspectionWithOdometer(Long id, User driver) {
+        VehicleInspection inspection = inspection(id, InspectionStatus.APPROVED);
+        inspection.setDriver(driver);
+        inspection.setOdometerPhotoPath("odo.jpg");
+        return inspection;
+    }
+
+    private static FileStorageService.StoredFile storedJpeg() {
+        return new FileStorageService.StoredFile(new ByteArrayResource(new byte[]{1, 2, 3}), MediaType.IMAGE_JPEG);
+    }
 
     private static Sort newestFirst() {
         return Sort.by(Sort.Direction.DESC, "inspectionDate").and(Sort.by(Sort.Direction.DESC, "id"));

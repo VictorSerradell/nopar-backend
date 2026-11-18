@@ -65,6 +65,8 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -97,6 +99,10 @@ class PostgresIntegrationTest {
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+    /** Cabecera JPEG válida: el servicio decide el tipo de fichero por su contenido, no por el nombre. */
+    private static final byte[] JPEG = {
+            (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 16, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1};
 
     /** Carpeta temporal para las fotos: los tests no tocan uploads/inspections. */
     private static final Path UPLOADS = createUploadsDir();
@@ -457,6 +463,57 @@ class PostgresIntegrationTest {
         assertThat(vehicleService.releaseVehiclesInUse()).isZero();
     }
 
+    // ------------------------------------------------------------------ fotos de los partes
+
+    @Test
+    void inspectionPhotosAreServedOverHttpOnlyToTheDriverWhoMadeTheReportAndToAdmins() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User author = saveUser("author", User.Role.DRIVER);
+        User other = saveUser("other", User.Role.DRIVER);
+        VehicleInspection report = report(saveVehicle("1111AAA", 1000), author, 1100, null);
+        String odometerUrl = "/api/v1/inspections/" + report.getId() + "/photos/odometer";
+
+        // El listado trae la URL de la foto que existe (la misma que atiende el controlador) y nada para las demás
+        mockMvc.perform(get("/api/v1/inspections/driver/me").with(user(author)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].odometerPhotoUrl").value(odometerUrl))
+                .andExpect(jsonPath("$.content[0].beaconPhotoUrl").doesNotExist())
+                .andExpect(jsonPath("$.content[0].exteriorPhotoUrl").doesNotExist());
+
+        // El conductor del parte y un administrador la descargan, con su tipo y con caché solo privada
+        for (User allowed : List.of(author, admin)) {
+            mockMvc.perform(get(odometerUrl).with(user(allowed)))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.IMAGE_JPEG))
+                    .andExpect(content().bytes(JPEG))
+                    .andExpect(header().string("Cache-Control", "max-age=3600, private"));
+        }
+
+        // Otro conductor no ve las fotos de un parte ajeno, y sin token ni se llega al controlador
+        mockMvc.perform(get(odometerUrl).with(user(other))).andExpect(status().isForbidden());
+        mockMvc.perform(get(odometerUrl)).andExpect(status().isUnauthorized());
+
+        // Foto que no se envió, tipo desconocido y parte inexistente: 404
+        mockMvc.perform(get("/api/v1/inspections/{id}/photos/beacon", report.getId()).with(user(author)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/inspections/{id}/photos/passport", report.getId()).with(user(author)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/inspections/{id}/photos/odometer", report.getId() + 1000).with(user(admin)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void givenPhotoFileMissingFromDisk_whenGetPhoto_thenNotFound() throws Exception {
+        User author = saveUser("author", User.Role.DRIVER);
+        VehicleInspection report = report(saveVehicle("1111AAA", 1000), author, 1100, null);
+        String storedName = inspectionRepository.findById(report.getId()).orElseThrow().getOdometerPhotoPath();
+        Files.delete(UPLOADS.resolve(storedName));
+
+        mockMvc.perform(get("/api/v1/inspections/{id}/photos/odometer", report.getId()).with(user(author)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
+    }
+
     // ------------------------------------------------------------------ cierre de sesión
 
     @Test
@@ -587,10 +644,8 @@ class PostgresIntegrationTest {
         return inspectionService.createInspection(request, odometerPhoto(), null, null, driver);
     }
 
-    /** Cabecera JPEG válida: el servicio decide el tipo de fichero por su contenido, no por el nombre. */
     private static MockMultipartFile odometerPhoto() {
-        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 16, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1};
-        return new MockMultipartFile("odometerPhoto", "odometer.jpg", "image/jpeg", jpeg);
+        return new MockMultipartFile("odometerPhoto", "odometer.jpg", "image/jpeg", JPEG);
     }
 
     private static List<InspectionResponse> responses(Page<VehicleInspection> page) {

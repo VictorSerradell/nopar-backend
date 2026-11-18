@@ -28,6 +28,9 @@ class InspectionResponseTest {
         assertThat(response.kilometers()).isEqualTo(15000);
         assertThat(response.tiresOk()).isTrue();
         assertThat(response.status()).isEqualTo(VehicleInspection.InspectionStatus.APPROVED);
+        assertThat(response.odometerPhotoUrl()).isEqualTo("/api/v1/inspections/1/photos/odometer");
+        assertThat(response.beaconPhotoUrl()).isNull();
+        assertThat(response.exteriorPhotoUrl()).isNull();
         // ni el hash de la contraseña ni la ruta de las fotos en el servidor salen en la respuesta
         assertThat(response.toString())
                 .doesNotContain("hash-que-no-debe-salir")
@@ -74,6 +77,33 @@ class InspectionResponseTest {
         assertThat(response.reviewedByUsername()).isEqualTo("admin");
         assertThat(response.reviewedAt()).isEqualTo(reviewedAt);
         assertThat(response.toString()).doesNotContain("otro-hash-que-no-debe-salir");
+    }
+
+    @Test
+    void givenInspectionWithPhotos_whenFrom_thenExposesOnlyTheApiUrlsNeverTheStoredNames() {
+        VehicleInspection inspection = fullInspection();
+        inspection.setOdometerPhotoPath("3f2c9a-odometro.jpg");
+        inspection.setBeaconPhotoPath("7b1d44-baliza.png");
+        inspection.setExteriorPhotosPath("c9e0aa-exterior.jpg");
+
+        InspectionResponse response = InspectionResponse.from(inspection);
+
+        assertThat(response.odometerPhotoUrl()).isEqualTo("/api/v1/inspections/1/photos/odometer");
+        assertThat(response.beaconPhotoUrl()).isEqualTo("/api/v1/inspections/1/photos/beacon");
+        assertThat(response.exteriorPhotoUrl()).isEqualTo("/api/v1/inspections/1/photos/exterior");
+        assertThat(response.toString())
+                .doesNotContain("odometro.jpg")
+                .doesNotContain("baliza.png")
+                .doesNotContain("exterior.jpg");
+    }
+
+    @Test
+    void givenInspectionWithoutPhotosOrId_whenFrom_thenNoPhotoUrls() {
+        InspectionResponse response = InspectionResponse.from(new VehicleInspection());
+
+        assertThat(response.odometerPhotoUrl()).isNull();
+        assertThat(response.beaconPhotoUrl()).isNull();
+        assertThat(response.exteriorPhotoUrl()).isNull();
     }
 
     @Test

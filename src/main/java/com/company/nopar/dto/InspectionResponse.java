@@ -1,5 +1,6 @@
 package com.company.nopar.dto;
 
+import com.company.nopar.entity.InspectionPhotoType;
 import com.company.nopar.entity.VehicleInspection;
 
 import java.time.LocalDateTime;
@@ -8,6 +9,10 @@ import java.util.List;
 /**
  * Vista pública de una inspección. No expone la entidad User (hash de contraseña, roles)
  * ni las rutas de las fotos en el servidor.
+ *
+ * Las fotos se descargan aparte: cada campo *PhotoUrl es la ruta relativa de la API
+ * ({@code /api/v1/inspections/{id}/photos/odometer|beacon|exterior}) o null si el parte no tiene esa foto.
+ * Hay que pedirla con la cabecera Authorization, como cualquier otro endpoint.
  */
 public record InspectionResponse(
         Long id,
@@ -26,7 +31,10 @@ public record InspectionResponse(
         Boolean acceptedCleanliness,
         VehicleInspection.InspectionStatus status,
         String reviewedByUsername,
-        LocalDateTime reviewedAt
+        LocalDateTime reviewedAt,
+        String odometerPhotoUrl,
+        String beaconPhotoUrl,
+        String exteriorPhotoUrl
 ) {
 
     public static InspectionResponse from(VehicleInspection inspection) {
@@ -50,8 +58,16 @@ public record InspectionResponse(
                 inspection.getAcceptedCleanliness(),
                 inspection.getStatus(),
                 reviewer != null ? reviewer.getUsername() : null,
-                inspection.getReviewedAt()
+                inspection.getReviewedAt(),
+                photoUrl(inspection, InspectionPhotoType.ODOMETER),
+                photoUrl(inspection, InspectionPhotoType.BEACON),
+                photoUrl(inspection, InspectionPhotoType.EXTERIOR)
         );
+    }
+
+    private static String photoUrl(VehicleInspection inspection, InspectionPhotoType type) {
+        boolean hasPhoto = inspection.getId() != null && type.storedNameOf(inspection) != null;
+        return hasPhoto ? type.urlFor(inspection.getId()) : null;
     }
 
     public static List<InspectionResponse> fromAll(List<VehicleInspection> inspections) {

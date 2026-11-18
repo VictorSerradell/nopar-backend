@@ -3,13 +3,18 @@ package com.company.nopar.controller;
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionResponse;
 import com.company.nopar.dto.PageResponse;
+import com.company.nopar.entity.InspectionPhotoType;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.VehicleInspection;
+import com.company.nopar.exception.ResourceNotFoundException;
+import com.company.nopar.service.FileStorageService;
 import com.company.nopar.service.InspectionService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +22,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.time.Duration;
 
 @RestController
 @RequestMapping("/api/v1/inspections")
@@ -39,6 +46,27 @@ public class InspectionController {
                 request, odometerPhoto, beaconPhoto, exteriorPhoto, currentUser
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(InspectionResponse.from(savedInspection));
+    }
+
+    /**
+     * Una foto del parte: odometer, beacon o exterior. La ven el conductor que hizo el parte y los administradores.
+     * Se pide con la cabecera Authorization, así que un cliente web la descarga como blob en vez de usar
+     * {@code <img src>} directamente. Es privada para la caché: solo la guarda el dispositivo de quien la pidió.
+     */
+    @GetMapping("/{id}/photos/{type}")
+    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
+    public ResponseEntity<Resource> getPhoto(
+            @PathVariable Long id,
+            @PathVariable String type,
+            @AuthenticationPrincipal User currentUser) {
+        InspectionPhotoType photoType = InspectionPhotoType.fromSlug(type)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Tipo de foto no válido. Use odometer, beacon o exterior"));
+        FileStorageService.StoredFile photo = inspectionService.getPhoto(id, photoType, currentUser);
+        return ResponseEntity.ok()
+                .contentType(photo.mediaType())
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePrivate())
+                .body(photo.resource());
     }
 
     @GetMapping("/driver/me")
