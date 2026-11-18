@@ -9,6 +9,12 @@ import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.service.FileStorageService;
 import com.company.nopar.service.InspectionService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -25,6 +31,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Duration;
 
+@Tag(name = "Partes de inspección", description = "Parte matutino del conductor: alta, consulta y fotos")
 @RestController
 @RequestMapping("/api/v1/inspections")
 @RequiredArgsConstructor
@@ -33,6 +40,11 @@ public class InspectionController {
     private final InspectionService inspectionService;
 
     /** Alta del parte de inspección: datos y checklist en la parte "data" (JSON) y las fotos como ficheros. */
+    @Operation(summary = "Registra el parte matutino de un vehículo",
+            description = "Multipart: la parte `data` es un JSON (Content-Type application/json) con kilómetros, checklist y aceptaciones; `odometerPhoto` es obligatoria; `beaconPhoto` y `exteriorPhoto` son opcionales. Solo se aceptan imágenes JPEG o PNG (se comprueba el contenido, no el nombre). El conductor sale del token. Queda APPROVED si el checklist es correcto y no se reportan daños; en otro caso SUBMITTED, pendiente de que un administrador lo revise.")
+    @ApiResponse(responseCode = "400", description = "Datos no válidos o archivo que no es JPEG/PNG")
+    @ApiResponse(responseCode = "404", description = "El vehículo no existe")
+    @ApiResponse(responseCode = "409", description = "Kilómetros menores que los registrados, o vehículo en MAINTENANCE")
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
     public ResponseEntity<InspectionResponse> createInspection(
@@ -53,10 +65,19 @@ public class InspectionController {
      * Se pide con la cabecera Authorization, así que un cliente web la descarga como blob en vez de usar
      * {@code <img src>} directamente. Es privada para la caché: solo la guarda el dispositivo de quien la pidió.
      */
+    @Operation(summary = "Descarga una foto del parte",
+            description = "Devuelve la imagen (image/jpeg o image/png). La ven el conductor que hizo el parte y los administradores. La URL de cada foto viene en los campos `odometerPhotoUrl`, `beaconPhotoUrl` y `exteriorPhotoUrl` del parte (null si no se envió).")
+    @ApiResponse(responseCode = "200", description = "La imagen",
+            content = {
+                    @Content(mediaType = "image/jpeg", schema = @Schema(type = "string", format = "binary")),
+                    @Content(mediaType = "image/png", schema = @Schema(type = "string", format = "binary"))})
+    @ApiResponse(responseCode = "403", description = "El parte lo hizo otro conductor")
+    @ApiResponse(responseCode = "404", description = "El parte no existe, no tiene esa foto o el tipo no es válido")
     @GetMapping("/{id}/photos/{type}")
     @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
     public ResponseEntity<Resource> getPhoto(
             @PathVariable Long id,
+            @Parameter(description = "Foto que se pide", schema = @Schema(allowableValues = {"odometer", "beacon", "exterior"}))
             @PathVariable String type,
             @AuthenticationPrincipal User currentUser) {
         InspectionPhotoType photoType = InspectionPhotoType.fromSlug(type)
@@ -69,6 +90,7 @@ public class InspectionController {
                 .body(photo.resource());
     }
 
+    @Operation(summary = "Lista los partes del conductor autenticado", description = "Paginado, del más reciente al más antiguo.")
     @GetMapping("/driver/me")
     @PreAuthorize("hasRole('DRIVER')")
     public ResponseEntity<PageResponse<InspectionResponse>> getMyInspections(

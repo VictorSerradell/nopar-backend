@@ -8,6 +8,9 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.VehicleService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -16,6 +19,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+@Tag(name = "Flota", description = "Vehículos, sus partes y su devolución")
 @RestController
 @RequestMapping("/api/v1/fleet")
 public class FleetController {
@@ -30,6 +34,7 @@ public class FleetController {
 
     // --- GESTIÓN DE VEHÍCULOS ---
 
+    @Operation(summary = "Lista los vehículos", description = "Paginado. Conductores y administradores.")
     @GetMapping("/vehicles")
     @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
     public ResponseEntity<PageResponse<VehicleResponse>> getAllVehicles(
@@ -41,6 +46,8 @@ public class FleetController {
         return ResponseEntity.ok(PageResponse.of(vehicleService.getAllVehicles(page, size), VehicleResponse::from));
     }
 
+    @Operation(summary = "Consulta un vehículo")
+    @ApiResponse(responseCode = "404", description = "El vehículo no existe")
     @GetMapping("/vehicles/{id}")
     @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
     public ResponseEntity<VehicleResponse> getVehicleById(@PathVariable Long id) {
@@ -50,6 +57,8 @@ public class FleetController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @Operation(summary = "Da de alta un vehículo", description = "Solo ADMIN.")
+    @ApiResponse(responseCode = "409", description = "Ya existe un vehículo con esa matrícula")
     @PostMapping("/vehicles")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<VehicleResponse> registerVehicle(@Valid @RequestBody VehicleRequest request) {
@@ -57,6 +66,8 @@ public class FleetController {
         return ResponseEntity.status(HttpStatus.CREATED).body(VehicleResponse.from(savedVehicle));
     }
 
+    @Operation(summary = "Corrige los kilómetros de un vehículo",
+            description = "Solo ADMIN. Acepta cualquier valor mayor o igual que 0 (los partes de los conductores nunca pueden bajarlos).")
     @PatchMapping("/vehicles/{id}/kilometers")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<VehicleResponse> updateKilometers(
@@ -66,6 +77,8 @@ public class FleetController {
         return ResponseEntity.ok(VehicleResponse.from(updated));
     }
 
+    @Operation(summary = "Elimina un vehículo", description = "Solo ADMIN.")
+    @ApiResponse(responseCode = "409", description = "El vehículo tiene partes registrados y no se puede eliminar")
     @DeleteMapping("/vehicles/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> deleteVehicle(@PathVariable Long id) {
@@ -75,6 +88,7 @@ public class FleetController {
 
     // --- GESTIÓN DE INSPECCIONES ASOCIADAS A LA FLOTA ---
 
+    @Operation(summary = "Lista los partes de un vehículo", description = "Paginado, del más reciente al más antiguo.")
     @GetMapping("/vehicles/{vehicleId}/inspections")
     @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
     public ResponseEntity<PageResponse<InspectionResponse>> getInspectionsByVehicle(
@@ -88,6 +102,8 @@ public class FleetController {
                 inspectionService.getInspectionsByVehicle(vehicleId, page, size), InspectionResponse::from));
     }
 
+    @Operation(summary = "Filtra los partes por estado",
+            description = "Solo ADMIN. Por ejemplo SUBMITTED para ver los pendientes de revisión.")
     @GetMapping("/inspections/filter")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<PageResponse<InspectionResponse>> getInspectionsByStatus(

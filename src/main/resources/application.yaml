@@ -64,3 +64,11 @@ application:
       secret-key: ${JWT_SECRET}
       # 15 minutos: la sesión larga la mantiene el refresh token (7 días)
       expiration: 900000
+
+# Documentación OpenAPI: contrato en /v3/api-docs y Swagger UI en /swagger-ui.html (ambos sin autenticación).
+# En producción conviene desactivarla con OPENAPI_ENABLED=false
+springdoc:
+  api-docs:
+    enabled: ${OPENAPI_ENABLED:true}
+  swagger-ui:
+    enabled: ${OPENAPI_ENABLED:true}

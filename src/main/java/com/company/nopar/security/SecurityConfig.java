@@ -37,6 +37,9 @@ public class SecurityConfig {
                         // login, renovar y cerrar la sesión de este dispositivo: la credencial es el refresh token
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout").permitAll()
                         .requestMatchers("/api/v1/auth/logout-all").authenticated()
+                        // contrato OpenAPI y Swagger UI: los equipos de Android, iOS y web los leen sin token
+                        // (en producción se desactivan con OPENAPI_ENABLED=false)
+                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

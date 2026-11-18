@@ -514,6 +514,47 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
     }
 
+    // ------------------------------------------------------------------ contrato OpenAPI
+
+    @Test
+    void openApiContractIsPublicAndDescribesSecurityPhotosAndPages() throws Exception {
+        String photoPath = "$.paths['/api/v1/inspections/{id}/photos/{type}'].get.responses['200'].content";
+
+        // Sin token: los equipos de Android, iOS y web (y sus generadores de código) leen el contrato directamente
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.info.title").value("Nopar API"))
+                // Bearer JWT, exigido por defecto en todas las operaciones
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.type").value("http"))
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme").value("bearer"))
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.bearerFormat").value("JWT"))
+                .andExpect(jsonPath("$.security[0].bearerAuth").isArray())
+                // login, refresh y logout se llaman sin token (security: []); logout-all hereda el requisito global
+                .andExpect(jsonPath("$.paths['/api/v1/auth/login'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/refresh'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/logout'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/logout-all'].post.security").doesNotExist())
+                // el alta del parte es multipart y la foto se describe como imagen binaria
+                .andExpect(jsonPath("$.paths['/api/v1/inspections'].post.requestBody.content['multipart/form-data']").exists())
+                .andExpect(jsonPath(photoPath + "['image/jpeg']").exists())
+                .andExpect(jsonPath(photoPath + "['image/png']").exists())
+                // el parte expone las URLs de las fotos y los listados son páginas de partes
+                .andExpect(jsonPath("$.components.schemas.InspectionResponse.properties.odometerPhotoUrl").exists())
+                .andExpect(jsonPath("$.components.schemas.PageResponseInspectionResponse.properties.content.items").exists())
+                // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
+                .andExpect(jsonPath("$.components.schemas.User").doesNotExist())
+                .andExpect(jsonPath("$.paths..parameters[?(@.name in ['currentUser', 'currentAdmin'])]").isEmpty());
+    }
+
+    @Test
+    void swaggerUiIsReachableWithoutToken() throws Exception {
+        for (String path : List.of("/swagger-ui.html", "/swagger-ui/index.html")) {
+            int status = mockMvc.perform(get(path)).andReturn().getResponse().getStatus();
+
+            assertThat(status).as(path).isNotIn(401, 403);
+        }
+    }
+
     // ------------------------------------------------------------------ cierre de sesión
 
     @Test

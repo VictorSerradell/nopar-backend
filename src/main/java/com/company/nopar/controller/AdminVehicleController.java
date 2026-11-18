@@ -3,6 +3,8 @@ package com.company.nopar.controller;
 import com.company.nopar.dto.VehicleResponse;
 import com.company.nopar.dto.VehicleStatusRequest;
 import com.company.nopar.service.VehicleService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /** Bajo /api/v1/admin: SecurityConfig lo reserva al rol ADMIN. */
+@Tag(name = "Administración", description = "Solo rol ADMIN: usuarios, estado de los vehículos y revisión de partes")
 @RestController
 @RequestMapping("/api/v1/admin/vehicles")
 @RequiredArgsConstructor
@@ -21,6 +24,8 @@ public class AdminVehicleController {
     private final VehicleService vehicleService;
 
     /** Cambia el estado de un vehículo, p. ej. de MAINTENANCE a AVAILABLE cuando ya está reparado. */
+    @Operation(summary = "Cambia el estado de un vehículo",
+            description = "Por ejemplo de MAINTENANCE a AVAILABLE cuando ya está reparado.")
     @PatchMapping("/{id}/status")
     public ResponseEntity<VehicleResponse> changeStatus(
             @PathVariable Long id,

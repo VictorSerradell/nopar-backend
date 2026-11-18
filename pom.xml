@@ -77,6 +77,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
+        <!-- Contrato OpenAPI para los clientes (Android, iOS y web): JSON en /v3/api-docs y Swagger UI en /swagger-ui.html.
+             Spring Boot no gestiona esta versión: la 3.2.x es la línea construida sobre Spring Boot 4.1 -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>3.2.0</version>
+        </dependency>
 
         <!-- Runtime & Compile-time -->
         <dependency>

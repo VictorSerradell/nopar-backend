@@ -6,6 +6,9 @@ import com.company.nopar.dto.PageResponse;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.service.InspectionService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** Bajo /api/v1/admin: SecurityConfig lo reserva al rol ADMIN. */
+@Tag(name = "Administración", description = "Solo rol ADMIN: usuarios, estado de los vehículos y revisión de partes")
 @RestController
 @RequestMapping("/api/v1/admin/inspections")
 @RequiredArgsConstructor
@@ -28,6 +32,7 @@ public class AdminInspectionController {
 
     private final InspectionService inspectionService;
 
+    @Operation(summary = "Lista todos los partes", description = "Paginado, del más reciente al más antiguo.")
     @GetMapping
     public ResponseEntity<PageResponse<InspectionResponse>> getAllInspections(
             @RequestParam(defaultValue = PageResponse.DEFAULT_PAGE)
@@ -40,6 +45,10 @@ public class AdminInspectionController {
     }
 
     /** Aprueba o rechaza una inspección pendiente (SUBMITTED). Queda constancia de quién y cuándo. */
+    @Operation(summary = "Aprueba o rechaza un parte pendiente",
+            description = "Solo partes en SUBMITTED. Queda constancia de quién y cuándo. Si se rechaza, el vehículo pasa a MAINTENANCE.")
+    @ApiResponse(responseCode = "404", description = "El parte no existe")
+    @ApiResponse(responseCode = "409", description = "El parte ya fue revisado")
     @PatchMapping("/{id}/review")
     public ResponseEntity<InspectionResponse> reviewInspection(
             @PathVariable Long id,
