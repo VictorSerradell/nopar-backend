@@ -28,6 +28,8 @@
     </scm>
     <properties>
         <java.version>21</java.version>
+        <!-- Vacío a propósito: el argLine de surefire (más abajo) lo referencia con @{argLine} y debe existir -->
+        <argLine></argLine>
     </properties>
     <dependencies>
         <!-- JWT Dependencies -->
@@ -176,6 +178,27 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            <!-- Mockito como agente de Java: sin esto se autoinstala en cada ejecución y el JDK avisa de que dejará
+                 de permitirlo. El plugin de dependencias deja en ${org.mockito:mockito-core:jar} la ruta del jar y
+                 @{argLine} conserva cualquier argLine que llegue de otro sitio (línea de comandos u otros plugins) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>@{argLine} -javaagent:${org.mockito:mockito-core:jar}</argLine>
+                </configuration>
             </plugin>
         </plugins>
     </build>
