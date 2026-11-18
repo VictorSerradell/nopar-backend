@@ -13,20 +13,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -154,28 +150,6 @@ class InspectionControllerTest {
                 .andExpect(jsonPath("$.errors.tiresOk").exists())
                 .andExpect(jsonPath("$.errors.lightsOk").exists())
                 .andExpect(jsonPath("$.errors.beaconV16Present").exists());
-
-        verifyNoInteractions(inspectionService);
-    }
-
-    @Test
-    void givenInspections_whenGetByVehicle_thenReturnsPageWithPublicView() throws Exception {
-        when(inspectionService.getInspectionsByVehicle(5L, 0, 20))
-                .thenReturn(new PageImpl<>(List.of(savedInspection()), PageRequest.of(0, 20), 1));
-
-        mockMvc.perform(get("/api/v1/inspections/vehicle/5"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content[0].vehicleLicensePlate").value("1234-ABC"))
-                .andExpect(jsonPath("$.content[0].driver").doesNotExist())
-                .andExpect(jsonPath("$.totalElements").value(1))
-                .andExpect(jsonPath("$..password").isEmpty());
-    }
-
-    @Test
-    void givenSizeAboveTheLimit_whenGetByVehicle_thenBadRequest() throws Exception {
-        mockMvc.perform(get("/api/v1/inspections/vehicle/5").param("size", "1000"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.title").value("Datos no válidos"));
 
         verifyNoInteractions(inspectionService);
     }

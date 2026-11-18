@@ -1,5 +1,6 @@
 package com.company.nopar.controller;
 
+import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.exception.DuplicateResourceException;
@@ -267,9 +268,16 @@ class FleetControllerTest {
     }
 
     @Test
-    void givenVehicle_whenGetInspectionsByVehicle_thenPageOfInspections() throws Exception {
+    void givenVehicle_whenGetInspectionsByVehicle_thenPageOfInspectionsWithPublicViewOnly() throws Exception {
+        User driver = new User();
+        driver.setId(7L);
+        driver.setUsername("conductor1");
+        driver.setPassword("$2a$10$hash-que-no-debe-salir");
+        driver.setRole(User.Role.DRIVER);
+
         VehicleInspection inspection = new VehicleInspection();
         inspection.setId(1L);
+        inspection.setDriver(driver);
         inspection.setStatus(VehicleInspection.InspectionStatus.SUBMITTED);
 
         when(inspectionService.getInspectionsByVehicle(10L, 1, 5))
@@ -278,8 +286,19 @@ class FleetControllerTest {
         mockMvc.perform(get("/api/v1/fleet/vehicles/10/inspections").param("page", "1").param("size", "5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].status").value("SUBMITTED"))
+                .andExpect(jsonPath("$.content[0].driver").doesNotExist())
+                .andExpect(jsonPath("$..password").isEmpty())
                 .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    void givenSizeAboveTheLimit_whenGetInspectionsByVehicle_thenBadRequest() throws Exception {
+        mockMvc.perform(get("/api/v1/fleet/vehicles/10/inspections").param("size", "1000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Datos no válidos"));
+
+        verifyNoInteractions(inspectionService);
     }
 
     private static Vehicle savedVehicle() {

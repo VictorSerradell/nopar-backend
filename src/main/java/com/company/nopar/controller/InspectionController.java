@@ -41,19 +41,6 @@ public class InspectionController {
         return ResponseEntity.status(HttpStatus.CREATED).body(InspectionResponse.from(savedInspection));
     }
 
-    @GetMapping("/vehicle/{vehicleId}")
-    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
-    public ResponseEntity<PageResponse<InspectionResponse>> getInspectionsByVehicle(
-            @PathVariable Long vehicleId,
-            @RequestParam(defaultValue = PageResponse.DEFAULT_PAGE)
-            @Min(value = 0, message = PageResponse.PAGE_MIN_MESSAGE) int page,
-            @RequestParam(defaultValue = PageResponse.DEFAULT_SIZE)
-            @Min(value = 1, message = PageResponse.SIZE_MIN_MESSAGE)
-            @Max(value = PageResponse.MAX_SIZE, message = PageResponse.SIZE_MAX_MESSAGE) int size) {
-        return ResponseEntity.ok(PageResponse.of(
-                inspectionService.getInspectionsByVehicle(vehicleId, page, size), InspectionResponse::from));
-    }
-
     @GetMapping("/driver/me")
     @PreAuthorize("hasRole('DRIVER')")
     public ResponseEntity<PageResponse<InspectionResponse>> getMyInspections(
