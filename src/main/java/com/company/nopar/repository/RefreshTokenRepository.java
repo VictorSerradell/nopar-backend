@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -24,4 +25,9 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     int deleteByTokenHash(@Param("tokenHash") String tokenHash);
 
     int deleteByUser(User user);
+
+    /** Borra de una sola sentencia todos los tokens que caducaron antes de {@code now}; devuelve cuántos. */
+    @Modifying
+    @Query("delete from RefreshToken t where t.expiryDate < :now")
+    int deleteExpiredBefore(@Param("now") Instant now);
 }

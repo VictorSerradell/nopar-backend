@@ -148,6 +148,19 @@ class RefreshTokenServiceTest {
                 .isEqualTo("ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb");
     }
 
+    @Test
+    void givenExpiredTokens_whenDeleteExpiredTokens_thenDeletesTheOnesBeforeNowAndReturnsHowMany() {
+        when(refreshTokenRepository.deleteExpiredBefore(any(Instant.class))).thenReturn(3);
+        Instant before = Instant.now();
+
+        int deleted = service.deleteExpiredTokens();
+
+        ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+        verify(refreshTokenRepository).deleteExpiredBefore(cutoff.capture());
+        assertThat(deleted).isEqualTo(3);
+        assertThat(cutoff.getValue()).isBetween(before, Instant.now());
+    }
+
     private RefreshToken stored(String hash, Instant expiry) {
         RefreshToken token = new RefreshToken();
         token.setId(1L);

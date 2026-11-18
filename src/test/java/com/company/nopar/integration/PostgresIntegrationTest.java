@@ -1,11 +1,13 @@
 package com.company.nopar.integration;
 
+import com.company.nopar.config.ExpiredRefreshTokenCleanup;
 import com.company.nopar.config.NightlyVehicleReset;
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionResponse;
 import com.company.nopar.dto.InspectionReviewRequest.Decision;
 import com.company.nopar.dto.VehicleReturnRequest;
 import com.company.nopar.dto.VehicleReturnResponse;
+import com.company.nopar.entity.RefreshToken;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
@@ -13,11 +15,13 @@ import com.company.nopar.entity.VehicleReturn;
 import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
+import com.company.nopar.repository.RefreshTokenRepository;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.VehicleReturnRepository;
 import com.company.nopar.service.InspectionService;
+import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.VehicleReturnService;
 import com.company.nopar.service.VehicleService;
 import jakarta.persistence.EntityManagerFactory;
@@ -48,6 +52,8 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
@@ -81,7 +87,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "application.bootstrap.admin.username=",
         "application.bootstrap.admin.password=",
         // El reseteo nocturno no debe dispararse durante los tests: se invoca a mano
-        "application.fleet.nightly-reset.cron=-"
+        "application.fleet.nightly-reset.cron=-",
+        "application.security.refresh-token-cleanup.cron=-"
 })
 @AutoConfigureMockMvc
 @Testcontainers
@@ -115,6 +122,12 @@ class PostgresIntegrationTest {
     @Autowired
     private NightlyVehicleReset nightlyVehicleReset;
     @Autowired
+    private RefreshTokenService refreshTokenService;
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
+    @Autowired
+    private ExpiredRefreshTokenCleanup expiredRefreshTokenCleanup;
+    @Autowired
     private VehicleInspectionRepository inspectionRepository;
     @Autowired
     private VehicleRepository vehicleRepository;
@@ -129,6 +142,7 @@ class PostgresIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
+        refreshTokenRepository.deleteAllInBatch();
         vehicleReturnRepository.deleteAllInBatch();
         inspectionRepository.deleteAllInBatch();
         vehicleRepository.deleteAllInBatch();
@@ -420,6 +434,25 @@ class PostgresIntegrationTest {
         assertThat(vehicleService.releaseVehiclesInUse()).isZero();
     }
 
+    // ------------------------------------------------------------------ limpieza de refresh tokens
+
+    @Test
+    void theCleanupDeletesOnlyTheExpiredRefreshTokens() {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        saveRefreshToken(driver, "expired-hash-1", Instant.now().minus(Duration.ofHours(1)));
+        saveRefreshToken(driver, "expired-hash-2", Instant.now().minus(Duration.ofDays(30)));
+        saveRefreshToken(driver, "valid-hash", Instant.now().plus(Duration.ofDays(6)));
+
+        expiredRefreshTokenCleanup.deleteExpiredTokens();
+
+        assertThat(refreshTokenRepository.findAll())
+                .extracting(RefreshToken::getTokenHash)
+                .containsExactly("valid-hash");
+        // Sin nada caducado, no borra nada
+        assertThat(refreshTokenService.deleteExpiredTokens()).isZero();
+        assertThat(refreshTokenRepository.count()).isEqualTo(1);
+    }
+
     @Test
     void deletingAVehicleWithInspectionsIsRejectedAndOneWithoutInspectionsIsDeleted() {
         User driver = saveUser("driver1", User.Role.DRIVER);
@@ -458,6 +491,14 @@ class PostgresIntegrationTest {
     }
 
     private record Scenario(User admin, User driver1, Vehicle van1, VehicleInspection oldest) {
+    }
+
+    private void saveRefreshToken(User user, String tokenHash, Instant expiry) {
+        RefreshToken token = new RefreshToken();
+        token.setUser(user);
+        token.setTokenHash(tokenHash);
+        token.setExpiryDate(expiry);
+        refreshTokenRepository.save(token);
     }
 
     private Vehicle.VehicleStatus statusOf(Vehicle vehicle) {

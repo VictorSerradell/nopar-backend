@@ -78,6 +78,15 @@ public class RefreshTokenService {
                 .orElse(0);
     }
 
+    /**
+     * Borra los refresh tokens caducados. Los tokens se consumen al rotarse y se borran al cerrar sesión,
+     * así que solo se acumulan los que caducaron sin que nadie los volviera a presentar. Devuelve cuántos borró.
+     */
+    @Transactional
+    public int deleteExpiredTokens() {
+        return refreshTokenRepository.deleteExpiredBefore(Instant.now());
+    }
+
     private IssuedRefreshToken issueFor(User user) {
         byte[] randomBytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(randomBytes);
