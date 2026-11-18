@@ -1,6 +1,7 @@
 package com.company.nopar.security;
 
 import com.company.nopar.controller.FleetController;
+import com.company.nopar.entity.Vehicle;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.VehicleService;
 import io.jsonwebtoken.MalformedJwtException;
@@ -14,6 +15,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -108,5 +110,24 @@ class SecurityConfigTest {
                                 {"status": "AVAILABLE"}
                                 """))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void givenDriver_whenUpdateKilometers_thenForbidden() throws Exception {
+        // Kilómetros válidos a propósito: la validación del @RequestParam se ejecuta antes que @PreAuthorize
+        mockMvc.perform(patch("/api/v1/fleet/vehicles/10/kilometers").param("kilometers", "5000"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(vehicleService);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void givenAdmin_whenUpdateKilometers_thenOk() throws Exception {
+        when(vehicleService.updateVehicleKilometers(10L, 5000)).thenReturn(new Vehicle());
+
+        mockMvc.perform(patch("/api/v1/fleet/vehicles/10/kilometers").param("kilometers", "5000"))
+                .andExpect(status().isOk());
     }
 }

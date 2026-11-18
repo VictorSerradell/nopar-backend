@@ -52,6 +52,11 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.CONFLICT, "Estado no válido", ex.getMessage());
     }
 
+    @ExceptionHandler(InvalidKilometersException.class)
+    public ProblemDetail handleInvalidKilometers(InvalidKilometersException ex) {
+        return problem(HttpStatus.CONFLICT, "Kilómetros no válidos", ex.getMessage());
+    }
+
     /** JSON mal formado o con valores fuera de lo permitido (p. ej. un enum desconocido). */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ProblemDetail handleUnreadableBody(HttpMessageNotReadableException ex) {

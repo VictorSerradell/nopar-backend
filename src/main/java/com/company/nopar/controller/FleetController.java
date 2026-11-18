@@ -58,7 +58,7 @@ public class FleetController {
     }
 
     @PatchMapping("/vehicles/{id}/kilometers")
-    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<VehicleResponse> updateKilometers(
             @PathVariable Long id,
             @RequestParam @Min(value = 0, message = "Los kilómetros no pueden ser negativos") int kilometers) {

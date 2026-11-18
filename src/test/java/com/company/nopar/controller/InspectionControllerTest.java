@@ -4,6 +4,7 @@ import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.exception.InvalidFileException;
+import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.InspectionService;
@@ -101,6 +102,20 @@ class InspectionControllerTest {
                         .file(odometerPhoto()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
+    }
+
+    @Test
+    void givenKilometersBelowTheRegisteredOnes_whenCreateInspection_thenConflict() throws Exception {
+        String detail = "Los kilómetros indicados (14999) son menores que los registrados para el vehículo (15000)";
+        when(inspectionService.createInspection(any(), any(), any(), any(), any()))
+                .thenThrow(new InvalidKilometersException(detail));
+
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(VALID_DATA))
+                        .file(odometerPhoto()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Kilómetros no válidos"))
+                .andExpect(jsonPath("$.detail").value(detail));
     }
 
     @Test

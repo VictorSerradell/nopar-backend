@@ -6,6 +6,7 @@ import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.exception.InvalidFileException;
+import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.VehicleInspectionRepository;
@@ -50,8 +51,14 @@ public class InspectionService {
             MultipartFile exteriorPhoto,
             User driver
     ) {
-        // 1. Verificar que el vehículo existe
+        // 1. Verificar que el vehículo existe y que su cuentakilómetros no retrocede: un valor menor que el
+        //    registrado es un error al teclear (o un intento de manipularlo). Si el dato guardado fuera el
+        //    erróneo, un administrador lo corrige con PATCH /api/v1/fleet/vehicles/{id}/kilometers
         Vehicle vehicle = findVehicle(request.vehicleId());
+        if (request.kilometers() < vehicle.getCurrentKilometers()) {
+            throw new InvalidKilometersException("Los kilómetros indicados (" + request.kilometers()
+                    + ") son menores que los registrados para el vehículo (" + vehicle.getCurrentKilometers() + ")");
+        }
 
         // 2. La foto del cuentakilómetros es obligatoria (un fichero vacío cuenta como no enviado)
         if (odometerPhoto == null || odometerPhoto.isEmpty()) {

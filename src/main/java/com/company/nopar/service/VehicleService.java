@@ -42,6 +42,7 @@ public class VehicleService {
         return vehicleRepository.findById(id);
     }
 
+    /** Corrección manual de los kilómetros por un administrador: es el único camino que permite bajarlos. */
     @Transactional
     public Vehicle updateVehicleKilometers(Long id, int newKilometers) {
         Vehicle vehicle = vehicleRepository.findById(id)

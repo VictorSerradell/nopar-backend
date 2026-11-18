@@ -7,6 +7,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.entity.VehicleInspection.InspectionStatus;
 import com.company.nopar.exception.InvalidFileException;
+import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.VehicleInspectionRepository;
@@ -140,6 +141,35 @@ class InspectionServiceTest {
 
         finishTransaction(TransactionSynchronization.STATUS_COMMITTED);
         verify(fileStorageService, never()).delete(any());
+    }
+
+    @Test
+    void givenKilometersBelowTheRegisteredOnes_whenCreateInspection_thenInvalidKilometersAndNothingStored() {
+        when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle())); // 15000 km registrados
+        InspectionCreateRequest rollback =
+                new InspectionCreateRequest(5L, 14999, true, true, true, null, true, true, true);
+
+        assertThatThrownBy(() -> inspectionService.createInspection(rollback, odometer, null, null, driver))
+                .isInstanceOf(InvalidKilometersException.class)
+                .hasMessageContaining("14999")
+                .hasMessageContaining("15000");
+
+        verifyNoInteractions(fileStorageService);
+        verify(vehicleRepository, never()).save(any());
+        verify(inspectionRepository, never()).save(any());
+    }
+
+    @Test
+    void givenSameKilometersAsRegistered_whenCreateInspection_thenAccepted() {
+        when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle()));
+        when(fileStorageService.storeFile(odometer)).thenReturn("odo.jpg");
+        when(inspectionRepository.save(any(VehicleInspection.class))).thenAnswer(call -> call.getArgument(0));
+        InspectionCreateRequest sameKilometers =
+                new InspectionCreateRequest(5L, 15000, true, true, true, null, true, true, true);
+
+        VehicleInspection result = inspectionService.createInspection(sameKilometers, odometer, null, null, driver);
+
+        assertThat(result.getKilometers()).isEqualTo(15000);
     }
 
     @ParameterizedTest
