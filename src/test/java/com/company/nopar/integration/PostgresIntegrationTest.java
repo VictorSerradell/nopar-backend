@@ -260,23 +260,45 @@ class PostgresIntegrationTest {
     // ------------------------------------------------------------------ reglas de negocio contra la base de datos
 
     @Test
-    void aReportUpdatesTheVehicleAndKeepsMaintenanceAndDamagedStates() {
+    void aReportUpdatesTheVehicleAndKeepsTheDamagedState() {
         User driver = saveUser("driver1", User.Role.DRIVER);
         Vehicle available = saveVehicle("1111AAA", 1000);
-        Vehicle inMaintenance = saveVehicle("2222BBB", 2000);
-        inMaintenance.setStatus(Vehicle.VehicleStatus.MAINTENANCE);
-        vehicleRepository.save(inMaintenance);
+        Vehicle damaged = saveVehicle("2222BBB", 2000);
+        damaged.setStatus(Vehicle.VehicleStatus.DAMAGED);
+        vehicleRepository.save(damaged);
 
         report(available, driver, 1150, null);
-        report(inMaintenance, driver, 2150, null);
+        report(damaged, driver, 2150, null);
 
         Vehicle availableAfter = vehicleRepository.findById(available.getId()).orElseThrow();
         assertThat(availableAfter.getCurrentKilometers()).isEqualTo(1150);
         assertThat(availableAfter.getStatus()).isEqualTo(Vehicle.VehicleStatus.IN_USE);
 
-        Vehicle maintenanceAfter = vehicleRepository.findById(inMaintenance.getId()).orElseThrow();
-        assertThat(maintenanceAfter.getCurrentKilometers()).isEqualTo(2150);
-        assertThat(maintenanceAfter.getStatus()).isEqualTo(Vehicle.VehicleStatus.MAINTENANCE);
+        Vehicle damagedAfter = vehicleRepository.findById(damaged.getId()).orElseThrow();
+        assertThat(damagedAfter.getCurrentKilometers()).isEqualTo(2150);
+        assertThat(damagedAfter.getStatus()).isEqualTo(Vehicle.VehicleStatus.DAMAGED);
+    }
+
+    @Test
+    void aReportOnAVehicleInMaintenanceIsRejectedAndLeavesNothingStored() {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Vehicle van = saveVehicle("1111AAA", 1000);
+        van.setStatus(Vehicle.VehicleStatus.MAINTENANCE);
+        vehicleRepository.save(van);
+
+        assertThatThrownBy(() -> report(van, driver, 1150, null))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("mantenimiento");
+
+        Vehicle after = vehicleRepository.findById(van.getId()).orElseThrow();
+        assertThat(after.getCurrentKilometers()).isEqualTo(1000);
+        assertThat(after.getStatus()).isEqualTo(Vehicle.VehicleStatus.MAINTENANCE);
+        assertThat(inspectionRepository.count()).isZero();
+
+        // en cuanto un administrador lo pone de nuevo en servicio, vuelve a admitir partes
+        vehicleService.changeVehicleStatus(van.getId(), Vehicle.VehicleStatus.AVAILABLE);
+        report(van, driver, 1150, null);
+        assertThat(statusOf(van)).isEqualTo(Vehicle.VehicleStatus.IN_USE);
     }
 
     @Test

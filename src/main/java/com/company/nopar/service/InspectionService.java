@@ -42,6 +42,9 @@ public class InspectionService {
      *
      * Estado inicial: APPROVED si todo el checklist es correcto y no se reporta ningún daño;
      * en cualquier otro caso queda en SUBMITTED, pendiente de que un administrador lo revise.
+     *
+     * Un vehículo en MAINTENANCE no admite partes (409): hasta que un administrador lo ponga de nuevo
+     * en servicio no puede salir a la ruta.
      */
     @Transactional
     public VehicleInspection createInspection(
@@ -51,10 +54,15 @@ public class InspectionService {
             MultipartFile exteriorPhoto,
             User driver
     ) {
-        // 1. Verificar que el vehículo existe y que su cuentakilómetros no retrocede: un valor menor que el
-        //    registrado es un error al teclear (o un intento de manipularlo). Si el dato guardado fuera el
-        //    erróneo, un administrador lo corrige con PATCH /api/v1/fleet/vehicles/{id}/kilometers
+        // 1. Verificar que el vehículo existe y está en servicio (en MAINTENANCE no se admiten partes) y que su
+        //    cuentakilómetros no retrocede: un valor menor que el registrado es un error al teclear (o un intento
+        //    de manipularlo). Si el dato guardado fuera el erróneo, un administrador lo corrige con
+        //    PATCH /api/v1/fleet/vehicles/{id}/kilometers
         Vehicle vehicle = findVehicle(request.vehicleId());
+        if (vehicle.getStatus() == Vehicle.VehicleStatus.MAINTENANCE) {
+            throw new InvalidStateException("El vehículo " + vehicle.getLicensePlate()
+                    + " está en mantenimiento y no admite partes hasta que un administrador cambie su estado");
+        }
         if (request.kilometers() < vehicle.getCurrentKilometers()) {
             throw InvalidKilometersException.lowerThanRegistered(request.kilometers(), vehicle.getCurrentKilometers());
         }
@@ -71,8 +79,8 @@ public class InspectionService {
         String beaconPath = store(beaconPhoto, storedFiles);
         String exteriorPath = store(exteriorPhoto, storedFiles);
 
-        // 4. Actualizar los kilómetros actuales del vehículo y marcarlo en uso. Un vehículo en MAINTENANCE
-        //    o DAMAGED conserva su estado: ese cambio lo decide un administrador, no el parte de un conductor
+        // 4. Actualizar los kilómetros actuales del vehículo y marcarlo en uso. Un vehículo DAMAGED conserva
+        //    su estado: ese cambio lo decide un administrador, no el parte de un conductor
         vehicle.setCurrentKilometers(request.kilometers());
         if (vehicle.getStatus() == Vehicle.VehicleStatus.AVAILABLE) {
             vehicle.setStatus(Vehicle.VehicleStatus.IN_USE);

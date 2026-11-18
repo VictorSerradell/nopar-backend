@@ -16,8 +16,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -172,20 +170,36 @@ class InspectionServiceTest {
         assertThat(result.getKilometers()).isEqualTo(15000);
     }
 
-    @ParameterizedTest
-    @EnumSource(value = Vehicle.VehicleStatus.class, names = {"MAINTENANCE", "DAMAGED"})
-    void givenVehicleOutOfService_whenCreateInspection_thenKeepsItsStatusButUpdatesKilometers(Vehicle.VehicleStatus status) {
+    @Test
+    void givenDamagedVehicle_whenCreateInspection_thenKeepsItsStatusButUpdatesKilometers() {
         Vehicle vehicle = vehicle();
-        vehicle.setStatus(status);
+        vehicle.setStatus(Vehicle.VehicleStatus.DAMAGED);
         when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle));
         when(fileStorageService.storeFile(odometer)).thenReturn("odo.jpg");
         when(inspectionRepository.save(any(VehicleInspection.class))).thenAnswer(call -> call.getArgument(0));
 
         inspectionService.createInspection(request(5L), odometer, null, null, driver);
 
-        assertThat(vehicle.getStatus()).isEqualTo(status);
+        assertThat(vehicle.getStatus()).isEqualTo(Vehicle.VehicleStatus.DAMAGED);
         assertThat(vehicle.getCurrentKilometers()).isEqualTo(20000);
         verify(vehicleRepository).save(vehicle);
+    }
+
+    @Test
+    void givenVehicleInMaintenance_whenCreateInspection_thenInvalidStateAndNothingStoredNorChanged() {
+        Vehicle vehicle = vehicle();
+        vehicle.setStatus(Vehicle.VehicleStatus.MAINTENANCE);
+        when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle));
+
+        assertThatThrownBy(() -> inspectionService.createInspection(request(5L), odometer, beacon, exterior, driver))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("mantenimiento");
+
+        assertThat(vehicle.getStatus()).isEqualTo(Vehicle.VehicleStatus.MAINTENANCE);
+        assertThat(vehicle.getCurrentKilometers()).isEqualTo(15000);
+        verifyNoInteractions(fileStorageService);
+        verify(vehicleRepository, never()).save(any());
+        verify(inspectionRepository, never()).save(any());
     }
 
     @Test

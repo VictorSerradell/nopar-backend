@@ -5,6 +5,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.exception.InvalidFileException;
 import com.company.nopar.exception.InvalidKilometersException;
+import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.InspectionService;
@@ -115,6 +116,20 @@ class InspectionControllerTest {
                         .file(odometerPhoto()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.title").value("Kilómetros no válidos"))
+                .andExpect(jsonPath("$.detail").value(detail));
+    }
+
+    @Test
+    void givenVehicleInMaintenance_whenCreateInspection_thenConflict() throws Exception {
+        String detail = "El vehículo 1234-ABC está en mantenimiento y no admite partes hasta que un administrador cambie su estado";
+        when(inspectionService.createInspection(any(), any(), any(), any(), any()))
+                .thenThrow(new InvalidStateException(detail));
+
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(VALID_DATA))
+                        .file(odometerPhoto()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Estado no válido"))
                 .andExpect(jsonPath("$.detail").value(detail));
     }
 
