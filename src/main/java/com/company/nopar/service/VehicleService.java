@@ -60,6 +60,15 @@ public class VehicleService {
         return vehicleRepository.save(vehicle);
     }
 
+    /**
+     * Red de seguridad nocturna: devuelve a AVAILABLE todos los vehículos que siguen IN_USE porque nadie los devolvió.
+     * No toca MAINTENANCE ni DAMAGED. Devuelve cuántos vehículos cambió.
+     */
+    @Transactional
+    public int releaseVehiclesInUse() {
+        return vehicleRepository.updateStatus(Vehicle.VehicleStatus.IN_USE, Vehicle.VehicleStatus.AVAILABLE);
+    }
+
     @Transactional
     public void deleteVehicle(Long id) {
         if (!vehicleRepository.existsById(id)) {

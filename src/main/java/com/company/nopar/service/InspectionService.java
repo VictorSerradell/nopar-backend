@@ -56,8 +56,7 @@ public class InspectionService {
         //    erróneo, un administrador lo corrige con PATCH /api/v1/fleet/vehicles/{id}/kilometers
         Vehicle vehicle = findVehicle(request.vehicleId());
         if (request.kilometers() < vehicle.getCurrentKilometers()) {
-            throw new InvalidKilometersException("Los kilómetros indicados (" + request.kilometers()
-                    + ") son menores que los registrados para el vehículo (" + vehicle.getCurrentKilometers() + ")");
+            throw InvalidKilometersException.lowerThanRegistered(request.kilometers(), vehicle.getCurrentKilometers());
         }
 
         // 2. La foto del cuentakilómetros es obligatoria (un fichero vacío cuenta como no enviado)

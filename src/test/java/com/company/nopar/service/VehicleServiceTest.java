@@ -128,6 +128,14 @@ class VehicleServiceTest {
         assertThat(vehicleService.getAllVehicles(1, 5)).isSameAs(page);
     }
 
+    @Test
+    void givenVehiclesInUse_whenReleaseVehiclesInUse_thenReturnsHowManyWentBackToAvailable() {
+        when(vehicleRepository.updateStatus(Vehicle.VehicleStatus.IN_USE, Vehicle.VehicleStatus.AVAILABLE))
+                .thenReturn(3);
+
+        assertThat(vehicleService.releaseVehiclesInUse()).isEqualTo(3);
+    }
+
     private static Vehicle vehicle(String licensePlate) {
         Vehicle vehicle = new Vehicle();
         vehicle.setLicensePlate(licensePlate);

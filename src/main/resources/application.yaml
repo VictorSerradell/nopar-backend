@@ -49,6 +49,12 @@ application:
       # Solo se usan si no existe ningún administrador; tras el primer arranque pueden quitarse
       username: ${ADMIN_USERNAME:}
       password: ${ADMIN_PASSWORD:}
+  fleet:
+    nightly-reset:
+      # Red de seguridad: a esta hora los vehículos que siguen IN_USE (nadie los devolvió) pasan a AVAILABLE.
+      # Cron de 6 campos (segundos incluidos) en la zona indicada; "-" lo desactiva
+      cron: "0 0 4 * * *"
+      zone: Europe/Madrid
   security:
     jwt:
       secret-key: ${JWT_SECRET}

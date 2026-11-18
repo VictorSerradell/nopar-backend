@@ -33,5 +33,9 @@ public interface VehicleInspectionRepository extends JpaRepository<VehicleInspec
     @EntityGraph(VehicleInspection.WITH_DETAILS)
     Page<VehicleInspection> findByStatus(VehicleInspection.InspectionStatus status, Pageable pageable);
 
+    /** El último parte de un vehículo: su conductor es quien lo tiene (y puede devolverlo). */
+    @EntityGraph(VehicleInspection.WITH_DETAILS)
+    Optional<VehicleInspection> findFirstByVehicleIdOrderByInspectionDateDescIdDesc(Long vehicleId);
+
     boolean existsByVehicleId(Long vehicleId);
 }

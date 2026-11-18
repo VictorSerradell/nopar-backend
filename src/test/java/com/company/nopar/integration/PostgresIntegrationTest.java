@@ -1,17 +1,24 @@
 package com.company.nopar.integration;
 
+import com.company.nopar.config.NightlyVehicleReset;
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionResponse;
 import com.company.nopar.dto.InspectionReviewRequest.Decision;
+import com.company.nopar.dto.VehicleReturnRequest;
+import com.company.nopar.dto.VehicleReturnResponse;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
+import com.company.nopar.entity.VehicleReturn;
 import com.company.nopar.exception.InvalidKilometersException;
+import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
+import com.company.nopar.repository.VehicleReturnRepository;
 import com.company.nopar.service.InspectionService;
+import com.company.nopar.service.VehicleReturnService;
 import com.company.nopar.service.VehicleService;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
@@ -26,6 +33,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -49,6 +57,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -70,7 +79,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.jpa.properties.hibernate.generate_statistics=true",
         // Ni el .env local ni un administrador inicial deben influir en estos tests
         "application.bootstrap.admin.username=",
-        "application.bootstrap.admin.password="
+        "application.bootstrap.admin.password=",
+        // El reseteo nocturno no debe dispararse durante los tests: se invoca a mano
+        "application.fleet.nightly-reset.cron=-"
 })
 @AutoConfigureMockMvc
 @Testcontainers
@@ -98,6 +109,12 @@ class PostgresIntegrationTest {
     @Autowired
     private VehicleService vehicleService;
     @Autowired
+    private VehicleReturnService vehicleReturnService;
+    @Autowired
+    private VehicleReturnRepository vehicleReturnRepository;
+    @Autowired
+    private NightlyVehicleReset nightlyVehicleReset;
+    @Autowired
     private VehicleInspectionRepository inspectionRepository;
     @Autowired
     private VehicleRepository vehicleRepository;
@@ -112,6 +129,7 @@ class PostgresIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
+        vehicleReturnRepository.deleteAllInBatch();
         inspectionRepository.deleteAllInBatch();
         vehicleRepository.deleteAllInBatch();
         userRepository.deleteAllInBatch();
@@ -135,13 +153,14 @@ class PostgresIntegrationTest {
         List<String> indexes = jdbc.queryForList(
                 "select indexname from pg_indexes where schemaname = 'public'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3");
+        assertThat(applied).containsExactly("1", "2", "3", "4");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
                 "idx_vehicle_inspections_status_date",
                 "idx_vehicle_inspections_date",
-                "idx_refresh_tokens_user");
+                "idx_refresh_tokens_user",
+                "idx_vehicle_returns_vehicle_date");
     }
 
     // ------------------------------------------------------------------ listados paginados
@@ -290,6 +309,117 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.title").value("Estado no válido"));
     }
 
+    // ------------------------------------------------------------------ devolución del vehículo y reseteo nocturno
+
+    @Test
+    void theDriverReturnsTheVehicleAndTheReturnIsStored() {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Vehicle van = saveVehicle("1111AAA", 1000);
+        report(van, driver, 1100, null);
+        assertThat(statusOf(van)).isEqualTo(Vehicle.VehicleStatus.IN_USE);
+
+        VehicleReturn saved = vehicleReturnService.returnVehicle(van.getId(), new VehicleReturnRequest(1180, null), driver);
+        VehicleReturnResponse response = VehicleReturnResponse.from(saved); // fuera de la transacción
+
+        assertThat(response.vehicleLicensePlate()).isEqualTo("1111AAA");
+        assertThat(response.returnedByUsername()).isEqualTo("driver1");
+        assertThat(response.vehicleStatus()).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
+        Vehicle after = vehicleRepository.findById(van.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
+        assertThat(after.getCurrentKilometers()).isEqualTo(1180);
+        assertThat(vehicleReturnRepository.count()).isEqualTo(1);
+
+        // Devolverlo otra vez (p. ej. un doble toque en el móvil) no crea una segunda devolución
+        assertThatThrownBy(() -> vehicleReturnService.returnVehicle(
+                van.getId(), new VehicleReturnRequest(1180, null), driver))
+                .isInstanceOf(InvalidStateException.class);
+        assertThat(vehicleReturnRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void aReturnWithDamagesSendsTheVehicleToMaintenanceAndKeepsTheDescription() {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Vehicle van = saveVehicle("1111AAA", 1000);
+        report(van, driver, 1100, null);
+
+        vehicleReturnService.returnVehicle(van.getId(), new VehicleReturnRequest(1150, "Espejo roto"), driver);
+
+        assertThat(statusOf(van)).isEqualTo(Vehicle.VehicleStatus.MAINTENANCE);
+        assertThat(vehicleReturnRepository.findAll())
+                .singleElement()
+                .satisfies(r -> assertThat(r.getDamagesReported()).isEqualTo("Espejo roto"));
+    }
+
+    @Test
+    void onlyTheDriverOfTheLastReportOrAnAdminCanReturnTheVehicle() {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        User other = saveUser("driver2", User.Role.DRIVER);
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        Vehicle van = saveVehicle("1111AAA", 1000);
+        report(van, driver, 1100, null);
+        VehicleReturnRequest request = new VehicleReturnRequest(1150, null);
+
+        assertThatThrownBy(() -> vehicleReturnService.returnVehicle(van.getId(), request, other))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThat(vehicleReturnRepository.count()).isZero();
+        assertThat(statusOf(van)).isEqualTo(Vehicle.VehicleStatus.IN_USE);
+
+        vehicleReturnService.returnVehicle(van.getId(), request, admin);
+
+        assertThat(vehicleReturnRepository.count()).isEqualTo(1);
+        assertThat(statusOf(van)).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
+    }
+
+    @Test
+    void returnOverHttpIsCreatedForTheDriverAndRejectedForOthers() throws Exception {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        User other = saveUser("driver2", User.Role.DRIVER);
+        Vehicle van = saveVehicle("1111AAA", 1000);
+        report(van, driver, 1100, null);
+        String body = "{\"kilometers\": 1180}";
+
+        mockMvc.perform(post("/api/v1/fleet/vehicles/{id}/return", van.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(post("/api/v1/fleet/vehicles/{id}/return", van.getId())
+                        .with(user(other))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/v1/fleet/vehicles/{id}/return", van.getId())
+                        .with(user(driver))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.vehicleLicensePlate").value("1111AAA"))
+                .andExpect(jsonPath("$.returnedByUsername").value("driver1"))
+                .andExpect(jsonPath("$.vehicleStatus").value("AVAILABLE"));
+    }
+
+    @Test
+    void theNightlyResetReturnsOnlyTheVehiclesStillInUseToAvailable() {
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Vehicle inUse1 = saveVehicle("1111AAA", 1000);
+        Vehicle inUse2 = saveVehicle("2222BBB", 2000);
+        Vehicle inMaintenance = saveVehicle("3333CCC", 3000);
+        inMaintenance.setStatus(Vehicle.VehicleStatus.MAINTENANCE);
+        vehicleRepository.save(inMaintenance);
+        Vehicle available = saveVehicle("4444DDD", 4000);
+        report(inUse1, driver, 1100, null);
+        report(inUse2, driver, 2100, null);
+
+        nightlyVehicleReset.releaseVehiclesInUse();
+
+        assertThat(statusOf(inUse1)).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
+        assertThat(statusOf(inUse2)).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
+        assertThat(statusOf(inMaintenance)).isEqualTo(Vehicle.VehicleStatus.MAINTENANCE);
+        assertThat(statusOf(available)).isEqualTo(Vehicle.VehicleStatus.AVAILABLE);
+        assertThat(vehicleService.releaseVehiclesInUse()).isZero();
+    }
+
     @Test
     void deletingAVehicleWithInspectionsIsRejectedAndOneWithoutInspectionsIsDeleted() {
         User driver = saveUser("driver1", User.Role.DRIVER);
@@ -328,6 +458,10 @@ class PostgresIntegrationTest {
     }
 
     private record Scenario(User admin, User driver1, Vehicle van1, VehicleInspection oldest) {
+    }
+
+    private Vehicle.VehicleStatus statusOf(Vehicle vehicle) {
+        return vehicleRepository.findById(vehicle.getId()).orElseThrow().getStatus();
     }
 
     private User saveUser(String username, User.Role role) {
