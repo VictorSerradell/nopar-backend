@@ -2,6 +2,8 @@ package com.company.nopar.integration;
 
 import com.company.nopar.config.ExpiredRefreshTokenCleanup;
 import com.company.nopar.config.NightlyVehicleReset;
+import com.company.nopar.dto.AnnouncementRequest;
+import com.company.nopar.dto.BoardAnnouncementResponse;
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionResponse;
 import com.company.nopar.dto.InspectionReviewRequest.Decision;
@@ -9,6 +11,7 @@ import com.company.nopar.dto.ShiftCreateRequest;
 import com.company.nopar.dto.ShiftResponse;
 import com.company.nopar.dto.VehicleReturnRequest;
 import com.company.nopar.dto.VehicleReturnResponse;
+import com.company.nopar.entity.Announcement;
 import com.company.nopar.entity.RefreshToken;
 import com.company.nopar.entity.ShiftAssignment;
 import com.company.nopar.entity.User;
@@ -20,6 +23,8 @@ import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
+import com.company.nopar.repository.AnnouncementReadRepository;
+import com.company.nopar.repository.AnnouncementRepository;
 import com.company.nopar.repository.RefreshTokenRepository;
 import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.UserRepository;
@@ -27,6 +32,7 @@ import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.VehicleReturnRepository;
 import com.company.nopar.repository.WaveRepository;
+import com.company.nopar.service.AnnouncementService;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.ShiftService;
@@ -66,6 +72,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Base64;
 import java.util.Comparator;
@@ -89,7 +96,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V5) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V6) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -148,6 +155,12 @@ class PostgresIntegrationTest {
     @Autowired
     private WaveRepository waveRepository;
     @Autowired
+    private AnnouncementService announcementService;
+    @Autowired
+    private AnnouncementRepository announcementRepository;
+    @Autowired
+    private AnnouncementReadRepository announcementReadRepository;
+    @Autowired
     private NightlyVehicleReset nightlyVehicleReset;
     @Autowired
     private RefreshTokenService refreshTokenService;
@@ -173,6 +186,9 @@ class PostgresIntegrationTest {
         // Los turnos apuntan a olas, conductores y furgonetas: se borran antes que ellos
         shiftAssignmentRepository.deleteAllInBatch();
         waveRepository.deleteAllInBatch();
+        // Las lecturas apuntan al aviso y al usuario; los avisos, a su autor
+        announcementReadRepository.deleteAllInBatch();
+        announcementRepository.deleteAllInBatch();
         refreshTokenRepository.deleteAllInBatch();
         vehicleReturnRepository.deleteAllInBatch();
         inspectionRepository.deleteAllInBatch();
@@ -201,7 +217,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -211,11 +227,14 @@ class PostgresIntegrationTest {
                 "idx_vehicle_returns_vehicle_date",
                 "idx_shift_assignments_driver_date",
                 "idx_shift_assignments_vehicle",
-                "idx_shift_assignments_wave");
+                "idx_shift_assignments_wave",
+                "idx_announcements_board",
+                "idx_announcement_reads_user");
         assertThat(uniques).contains(
                 "uk_waves_name",
                 "uk_shift_assignments_driver_day",
-                "uk_shift_assignments_vehicle_day");
+                "uk_shift_assignments_vehicle_day",
+                "uk_announcement_reads_announcement_user");
     }
 
     // ------------------------------------------------------------------ listados paginados
@@ -584,6 +603,14 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/admin/waves'].post").exists())
                 .andExpect(jsonPath("$.components.schemas.ShiftResponse.properties.waveStartTime").exists())
                 .andExpect(jsonPath("$.components.schemas.ShiftResponse.properties.vehicleLicensePlate").exists())
+                // tablón de avisos: páginas con el indicador de lectura, marcar como leído y quién lo ha leído
+                .andExpect(jsonPath("$.paths['/api/v1/announcements'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/announcements/{id}/read'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/announcements'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/announcements/{id}'].patch").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/announcements/{id}/reads'].get").exists())
+                .andExpect(jsonPath("$.components.schemas.BoardAnnouncementResponse.properties.read").exists())
+                .andExpect(jsonPath("$.components.schemas.PageResponseBoardAnnouncementResponse.properties.content.items").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
                 .andExpect(jsonPath("$.components.schemas.User").doesNotExist())
                 .andExpect(jsonPath("$.paths..parameters[?(@.name in ['currentUser', 'currentAdmin'])]").isEmpty());
@@ -832,6 +859,151 @@ class PostgresIntegrationTest {
         vehicleService.deleteVehicle(spare.getId());
 
         assertThat(vehicleRepository.findAll()).extracting(Vehicle::getLicensePlate).containsExactly("1111AAA");
+    }
+
+    // ------------------------------------------------------------------ tablón de avisos
+
+    @Test
+    void theAdminPublishesAnnouncementsAndUsersReadThemOverHttp() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User driver1 = saveUser("driver1", User.Role.DRIVER);
+        User driver2 = saveUser("driver2", User.Role.DRIVER);
+        MediaType json = MediaType.APPLICATION_JSON;
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        String pinnedBody = """
+                {"title": "Lockers", "body": "Recordad cerrar la puerta", "pinned": true}
+                """;
+
+        // Solo un administrador publica
+        mockMvc.perform(post("/api/v1/admin/announcements").contentType(json).content(pinnedBody))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/admin/announcements").with(user(driver1)).contentType(json).content(pinnedBody))
+                .andExpect(status().isForbidden());
+        long pinned = idOf(mockMvc.perform(post("/api/v1/admin/announcements").with(user(admin)).contentType(json).content(pinnedBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.pinned").value(true))
+                .andExpect(jsonPath("$.createdByUsername").value("admin1")));
+        long older = idOf(mockMvc.perform(post("/api/v1/admin/announcements").with(user(admin)).contentType(json).content("""
+                        {"title": "Entregas", "body": "Entregad antes de las 14:00"}
+                        """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.pinned").value(false)));
+        long newer = idOf(mockMvc.perform(post("/api/v1/admin/announcements").with(user(admin)).contentType(json).content("""
+                        {"title": "Nueva ola", "body": "Hay una ola nueva a las 11:00"}
+                        """))
+                .andExpect(status().isCreated()));
+
+        // El tablón: primero el fijado y luego los más recientes; nadie ha leído nada
+        mockMvc.perform(get("/api/v1/announcements").with(user(driver1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.content[0].id").value(pinned))
+                .andExpect(jsonPath("$.content[1].id").value(newer))
+                .andExpect(jsonPath("$.content[2].id").value(older))
+                .andExpect(jsonPath("$.content[0].read").value(false))
+                .andExpect(jsonPath("$.content[1].read").value(false))
+                .andExpect(jsonPath("$.content[2].read").value(false));
+        mockMvc.perform(get("/api/v1/announcements"))
+                .andExpect(status().isUnauthorized());
+
+        // driver1 lee el aviso reciente; repetirlo no cambia nada y conserva la primera fecha
+        mockMvc.perform(post("/api/v1/announcements/{id}/read", newer).with(user(driver1)))
+                .andExpect(status().isNoContent());
+        String sql = "select read_at from announcement_reads where announcement_id = ? and user_id = ?";
+        LocalDateTime firstRead = jdbc.queryForObject(sql, LocalDateTime.class, newer, driver1.getId());
+        mockMvc.perform(post("/api/v1/announcements/{id}/read", newer).with(user(driver1)))
+                .andExpect(status().isNoContent());
+        assertThat(jdbc.queryForObject(sql, LocalDateTime.class, newer, driver1.getId())).isEqualTo(firstRead);
+        assertThat(jdbc.queryForObject("select count(*) from announcement_reads", Long.class)).isEqualTo(1L);
+        mockMvc.perform(post("/api/v1/announcements/{id}/read", 999999L).with(user(driver1)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/announcements/{id}/read", newer))
+                .andExpect(status().isUnauthorized());
+
+        // La lectura es de cada usuario: driver1 ve el aviso como leído y driver2, no
+        mockMvc.perform(get("/api/v1/announcements").with(user(driver1)))
+                .andExpect(jsonPath("$.content[0].read").value(false))
+                .andExpect(jsonPath("$.content[1].id").value(newer))
+                .andExpect(jsonPath("$.content[1].read").value(true))
+                .andExpect(jsonPath("$.content[2].read").value(false));
+        mockMvc.perform(get("/api/v1/announcements").with(user(driver2)))
+                .andExpect(jsonPath("$.content[1].id").value(newer))
+                .andExpect(jsonPath("$.content[1].read").value(false));
+
+        // El administrador ve quién lo ha leído; un conductor no
+        mockMvc.perform(post("/api/v1/announcements/{id}/read", newer).with(user(driver2)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/v1/admin/announcements/{id}/reads", newer).with(user(admin)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[0].username").value("driver1"))
+                .andExpect(jsonPath("$[1].username").value("driver2"))
+                .andExpect(jsonPath("$[0].readAt").exists());
+        mockMvc.perform(get("/api/v1/admin/announcements/{id}/reads", newer).with(user(driver1)))
+                .andExpect(status().isForbidden());
+
+        // Fijar el aviso reciente lo pone el primero; un título vacío o ningún cambio se rechazan
+        mockMvc.perform(patch("/api/v1/admin/announcements/{id}", newer).with(user(admin)).contentType(json).content("""
+                        {"pinned": true}
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pinned").value(true));
+        mockMvc.perform(get("/api/v1/announcements").with(user(driver1)))
+                .andExpect(jsonPath("$.content[0].id").value(newer))
+                .andExpect(jsonPath("$.content[1].id").value(pinned))
+                .andExpect(jsonPath("$.content[2].id").value(older));
+        mockMvc.perform(patch("/api/v1/admin/announcements/{id}", newer).with(user(admin)).contentType(json).content("""
+                        {"title": "   "}
+                        """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("El título no puede estar vacío"));
+        mockMvc.perform(patch("/api/v1/admin/announcements/{id}", newer).with(user(admin)).contentType(json).content("{}"))
+                .andExpect(status().isBadRequest());
+
+        // Paginación del tablón
+        mockMvc.perform(get("/api/v1/announcements").param("page", "1").param("size", "2").with(user(driver1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content", hasSize(1)))
+                .andExpect(jsonPath("$.totalPages").value(2));
+
+        // Al borrar el aviso se borran sus lecturas
+        mockMvc.perform(delete("/api/v1/admin/announcements/{id}", newer).with(user(driver1)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/v1/admin/announcements/{id}", newer).with(user(admin)))
+                .andExpect(status().isNoContent());
+        assertThat(jdbc.queryForObject("select count(*) from announcement_reads", Long.class)).isZero();
+        mockMvc.perform(get("/api/v1/admin/announcements/{id}/reads", newer).with(user(admin)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(delete("/api/v1/admin/announcements/{id}", newer).with(user(admin)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/announcements").with(user(driver1)))
+                .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @Test
+    void theBoardIsBuiltOutsideTheTransactionInPinnedThenNewestOrderWithoutNPlusOne() {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Announcement one = announcementService.createAnnouncement(new AnnouncementRequest("Uno", "Texto uno", false), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Dos", "Texto dos", true), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Tres", "Texto tres", false), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Cuatro", "Texto cuatro", false), admin);
+        Announcement five = announcementService.createAnnouncement(new AnnouncementRequest("Cinco", "Texto cinco", true), admin);
+        announcementService.markAsRead(one.getId(), driver);
+        announcementService.markAsRead(five.getId(), driver);
+
+        Statistics statistics = statistics();
+        statistics.clear();
+        Page<BoardAnnouncementResponse> board = announcementService.getBoard(driver, 0, 20);
+
+        // La página, el total y las lecturas de toda la página en una sola consulta: nada de una por aviso, y el
+        // autor viene cargado (aquí ya no hay sesión de Hibernate abierta)
+        assertThat(statistics.getPrepareStatementCount()).isLessThanOrEqualTo(3L);
+        assertThat(board.getContent()).extracting(BoardAnnouncementResponse::title)
+                .containsExactly("Cinco", "Dos", "Cuatro", "Tres", "Uno");
+        assertThat(board.getContent()).extracting(BoardAnnouncementResponse::read)
+                .containsExactly(true, false, false, false, true);
+        assertThat(board.getContent()).allSatisfy(a -> assertThat(a.createdByUsername()).isEqualTo("admin1"));
     }
 
     // ------------------------------------------------------------------ datos de prueba
