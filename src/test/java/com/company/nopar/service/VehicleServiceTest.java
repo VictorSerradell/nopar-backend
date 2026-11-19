@@ -4,6 +4,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.exception.ResourceNotFoundException;
+import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,9 @@ class VehicleServiceTest {
 
     @Mock
     private VehicleInspectionRepository inspectionRepository;
+
+    @Mock
+    private ShiftAssignmentRepository shiftAssignmentRepository;
 
     @InjectMocks
     private VehicleService vehicleService;
@@ -82,6 +86,19 @@ class VehicleServiceTest {
         assertThatThrownBy(() -> vehicleService.deleteVehicle(10L))
                 .isInstanceOf(ResourceInUseException.class)
                 .hasMessageContaining("inspecciones");
+
+        verify(vehicleRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void givenVehicleWithShifts_whenDelete_thenInUseAndNothingDeleted() {
+        when(vehicleRepository.existsById(10L)).thenReturn(true);
+        when(inspectionRepository.existsByVehicleId(10L)).thenReturn(false);
+        when(shiftAssignmentRepository.existsByVehicleId(10L)).thenReturn(true);
+
+        assertThatThrownBy(() -> vehicleService.deleteVehicle(10L))
+                .isInstanceOf(ResourceInUseException.class)
+                .hasMessageContaining("turnos");
 
         verify(vehicleRepository, never()).deleteById(any());
     }

@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /** Bajo /api/v1/admin: SecurityConfig lo reserva al rol ADMIN. */
-@Tag(name = "Administración", description = "Solo rol ADMIN: usuarios, estado de los vehículos y revisión de partes")
+@Tag(name = "Administración", description = "Operaciones reservadas al rol ADMIN")
 @RestController
 @RequestMapping("/api/v1/admin/vehicles")
 @RequiredArgsConstructor

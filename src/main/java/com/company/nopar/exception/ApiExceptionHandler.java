@@ -6,9 +6,11 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -63,6 +65,24 @@ public class ApiExceptionHandler {
         // Sin el detalle del parser: solo se dice qué revisar
         return problem(HttpStatus.BAD_REQUEST, "Cuerpo no válido",
                 "El cuerpo de la petición no se puede leer: revisa el formato y los valores permitidos");
+    }
+
+    @ExceptionHandler(InvalidRequestException.class)
+    public ProblemDetail handleInvalidRequest(InvalidRequestException ex) {
+        return problem(HttpStatus.BAD_REQUEST, "Datos no válidos", ex.getMessage());
+    }
+
+    /** Falta un parámetro obligatorio de la query (p. ej. ?from= en el cuadrante). */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ProblemDetail handleMissingParameter(MissingServletRequestParameterException ex) {
+        return problem(HttpStatus.BAD_REQUEST, "Datos no válidos", "Falta el parámetro '" + ex.getParameterName() + "'");
+    }
+
+    /** Un parámetro de ruta o de query con un formato que no corresponde (una fecha mal escrita, un enum desconocido). */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ProblemDetail handleParameterTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return problem(HttpStatus.BAD_REQUEST, "Datos no válidos",
+                "El parámetro '" + ex.getName() + "' no tiene un valor válido");
     }
 
     @ExceptionHandler(InvalidFileException.class)

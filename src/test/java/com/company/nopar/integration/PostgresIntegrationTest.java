@@ -5,26 +5,34 @@ import com.company.nopar.config.NightlyVehicleReset;
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionResponse;
 import com.company.nopar.dto.InspectionReviewRequest.Decision;
+import com.company.nopar.dto.ShiftCreateRequest;
+import com.company.nopar.dto.ShiftResponse;
 import com.company.nopar.dto.VehicleReturnRequest;
 import com.company.nopar.dto.VehicleReturnResponse;
 import com.company.nopar.entity.RefreshToken;
+import com.company.nopar.entity.ShiftAssignment;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.entity.VehicleReturn;
+import com.company.nopar.entity.Wave;
 import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.repository.RefreshTokenRepository;
+import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.VehicleReturnRepository;
+import com.company.nopar.repository.WaveRepository;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.RefreshTokenService;
+import com.company.nopar.service.ShiftService;
 import com.company.nopar.service.VehicleReturnService;
 import com.company.nopar.service.VehicleService;
+import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -34,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -42,6 +51,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.util.FileSystemUtils;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -55,13 +65,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -74,7 +89,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (V1, V2 y V3) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V5) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -127,6 +142,12 @@ class PostgresIntegrationTest {
     @Autowired
     private VehicleReturnRepository vehicleReturnRepository;
     @Autowired
+    private ShiftService shiftService;
+    @Autowired
+    private ShiftAssignmentRepository shiftAssignmentRepository;
+    @Autowired
+    private WaveRepository waveRepository;
+    @Autowired
     private NightlyVehicleReset nightlyVehicleReset;
     @Autowired
     private RefreshTokenService refreshTokenService;
@@ -149,6 +170,9 @@ class PostgresIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
+        // Los turnos apuntan a olas, conductores y furgonetas: se borran antes que ellos
+        shiftAssignmentRepository.deleteAllInBatch();
+        waveRepository.deleteAllInBatch();
         refreshTokenRepository.deleteAllInBatch();
         vehicleReturnRepository.deleteAllInBatch();
         inspectionRepository.deleteAllInBatch();
@@ -174,14 +198,24 @@ class PostgresIntegrationTest {
         List<String> indexes = jdbc.queryForList(
                 "select indexname from pg_indexes where schemaname = 'public'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4");
+        List<String> uniques = jdbc.queryForList(
+                "select conname from pg_constraint where contype = 'u'", String.class);
+
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
                 "idx_vehicle_inspections_status_date",
                 "idx_vehicle_inspections_date",
                 "idx_refresh_tokens_user",
-                "idx_vehicle_returns_vehicle_date");
+                "idx_vehicle_returns_vehicle_date",
+                "idx_shift_assignments_driver_date",
+                "idx_shift_assignments_vehicle",
+                "idx_shift_assignments_wave");
+        assertThat(uniques).contains(
+                "uk_waves_name",
+                "uk_shift_assignments_driver_day",
+                "uk_shift_assignments_vehicle_day");
     }
 
     // ------------------------------------------------------------------ listados paginados
@@ -541,6 +575,15 @@ class PostgresIntegrationTest {
                 // el parte expone las URLs de las fotos y los listados son páginas de partes
                 .andExpect(jsonPath("$.components.schemas.InspectionResponse.properties.odometerPhotoUrl").exists())
                 .andExpect(jsonPath("$.components.schemas.PageResponseInspectionResponse.properties.content.items").exists())
+                // cuadrantes: el rango de fechas es obligatorio y la respuesta describe la ola, el conductor y la furgoneta
+                .andExpect(jsonPath("$.paths['/api/v1/shifts'].get.parameters[?(@.name == 'from')]").isNotEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/shifts'].get.parameters[?(@.name == 'to')]").isNotEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/shifts/me'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/shifts'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/shifts/{id}'].patch").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/waves'].post").exists())
+                .andExpect(jsonPath("$.components.schemas.ShiftResponse.properties.waveStartTime").exists())
+                .andExpect(jsonPath("$.components.schemas.ShiftResponse.properties.vehicleLicensePlate").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
                 .andExpect(jsonPath("$.components.schemas.User").doesNotExist())
                 .andExpect(jsonPath("$.paths..parameters[?(@.name in ['currentUser', 'currentAdmin'])]").isEmpty());
@@ -622,6 +665,175 @@ class PostgresIntegrationTest {
         assertThat(vehicleRepository.findAll()).extracting(Vehicle::getLicensePlate).containsExactly("1111AAA");
     }
 
+    // ------------------------------------------------------------------ cuadrantes
+
+    @Test
+    void theAdminBuildsTheScheduleOverHttpAndDriversReadIt() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User driver1 = saveUser("driver1", User.Role.DRIVER);
+        User driver2 = saveUser("driver2", User.Role.DRIVER);
+        User driver3 = saveUser("driver3", User.Role.DRIVER);
+        Vehicle van1 = saveVehicle("1111AAA", 1000);
+        Vehicle van2 = saveVehicle("2222BBB", 2000);
+        MediaType json = MediaType.APPLICATION_JSON;
+        String earlyWaveBody = """
+                {"name": "Ola 1", "startTime": "09:30"}
+                """;
+
+        // Solo un administrador crea olas
+        mockMvc.perform(post("/api/v1/admin/waves").contentType(json).content(earlyWaveBody))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/admin/waves").with(user(driver1)).contentType(json).content(earlyWaveBody))
+                .andExpect(status().isForbidden());
+        long early = idOf(mockMvc.perform(post("/api/v1/admin/waves").with(user(admin)).contentType(json).content(earlyWaveBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Ola 1"))
+                .andExpect(jsonPath("$.startTime", startsWith("09:30"))));
+        long late = idOf(mockMvc.perform(post("/api/v1/admin/waves").with(user(admin)).contentType(json).content("""
+                        {"name": "Ola 2", "startTime": "11:00"}
+                        """))
+                .andExpect(status().isCreated()));
+        // El nombre es único sin distinguir mayúsculas
+        mockMvc.perform(post("/api/v1/admin/waves").with(user(admin)).contentType(json).content("""
+                        {"name": "OLA 1", "startTime": "10:00"}
+                        """))
+                .andExpect(status().isConflict());
+        mockMvc.perform(get("/api/v1/admin/waves").with(user(admin)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].name").value("Ola 1"))
+                .andExpect(jsonPath("$[1].name").value("Ola 2"));
+
+        // El administrador asigna turnos: el conductor y la furgoneta quedan ocupados ese día
+        String day = "2026-11-19";
+        long shift1 = idOf(mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, late, driver1, van1)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.waveName").value("Ola 2"))
+                .andExpect(jsonPath("$.driverUsername").value("driver1"))
+                .andExpect(jsonPath("$.vehicleLicensePlate").value("1111AAA")));
+        long shift2 = idOf(mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, early, driver2, van2)))
+                .andExpect(status().isCreated()));
+        mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, early, driver1, van2)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Recurso duplicado"));
+        mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, early, driver3, van1)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, early, admin, van1)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("El usuario admin1 no es un conductor"));
+        mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, 999999L, driver3, van1)))
+                .andExpect(status().isNotFound());
+
+        // Modificar un turno: no puede chocar con otro, pero sí consigo mismo
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shift2).with(user(admin)).contentType(json).content("""
+                        {"vehicleId": %d}
+                        """.formatted(van1.getId())))
+                .andExpect(status().isConflict());
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shift2).with(user(admin)).contentType(json).content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shift2).with(user(admin)).contentType(json).content("""
+                        {"workDate": "2026-11-20"}
+                        """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.workDate").value("2026-11-20"))
+                .andExpect(jsonPath("$.driverUsername").value("driver2"));
+
+        // Los conductores leen el cuadrante completo y sus propios turnos
+        mockMvc.perform(get("/api/v1/shifts").param("from", day).param("to", "2026-11-20").with(user(driver1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[0].workDate").value(day))
+                .andExpect(jsonPath("$[0].driverUsername").value("driver1"))
+                .andExpect(jsonPath("$[1].workDate").value("2026-11-20"))
+                .andExpect(jsonPath("$[1].driverUsername").value("driver2"));
+        mockMvc.perform(get("/api/v1/shifts/me").param("from", day).param("to", "2026-11-20").with(user(driver2)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].driverUsername").value("driver2"))
+                .andExpect(jsonPath("$[0].vehicleLicensePlate").value("2222BBB"));
+        mockMvc.perform(get("/api/v1/shifts/me").param("from", day).param("to", "2026-11-20").with(user(admin)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/shifts").param("from", day).param("to", "2026-12-31").with(user(driver1)))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/shifts").param("from", day))
+                .andExpect(status().isUnauthorized());
+
+        // Una ola con turnos no se puede borrar; sin ellos, sí
+        mockMvc.perform(delete("/api/v1/admin/waves/{id}", late).with(user(admin)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Recurso en uso"));
+        mockMvc.perform(delete("/api/v1/admin/shifts/{id}", shift1).with(user(driver1)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/v1/admin/shifts/{id}", shift1).with(user(admin)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/v1/admin/shifts/{id}", shift1).with(user(admin)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(delete("/api/v1/admin/waves/{id}", late).with(user(admin)))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void theScheduleIsListedInOneStatementInReadingOrderAndTheDatabaseRejectsDoubleBookings() {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User carlos = saveUser("carlos", User.Role.DRIVER);
+        User dani = saveUser("dani", User.Role.DRIVER);
+        Vehicle van1 = saveVehicle("1111AAA", 1000);
+        Vehicle van2 = saveVehicle("2222BBB", 2000);
+        Vehicle van3 = saveVehicle("3333CCC", 3000);
+        Vehicle van4 = saveVehicle("4444DDD", 4000);
+        Wave early = saveWave("Ola 1", LocalTime.of(9, 30));
+        Wave late = saveWave("Ola 2", LocalTime.of(11, 0));
+        LocalDate day = LocalDate.of(2026, 11, 19);
+        shiftService.createShift(new ShiftCreateRequest(day, late.getId(), ana.getId(), van1.getId()), admin);
+        shiftService.createShift(new ShiftCreateRequest(day, early.getId(), carlos.getId(), van2.getId()), admin);
+        shiftService.createShift(new ShiftCreateRequest(day, early.getId(), bea.getId(), van3.getId()), admin);
+        shiftService.createShift(new ShiftCreateRequest(day.plusDays(1), early.getId(), ana.getId(), van1.getId()), admin);
+
+        Statistics statistics = statistics();
+        statistics.clear();
+        List<ShiftResponse> responses = ShiftResponse.fromAll(shiftService.getShifts(day, day.plusDays(1)));
+
+        // Ola, conductor y furgoneta vienen en la misma consulta: sin LazyInitializationException ni una por turno
+        assertThat(statistics.getPrepareStatementCount()).isLessThanOrEqualTo(1L);
+        // Se lee en orden: día, hora de la ola y conductor
+        assertThat(responses).extracting(ShiftResponse::driverUsername).containsExactly("bea", "carlos", "ana", "ana");
+        assertThat(responses).extracting(ShiftResponse::waveName).containsExactly("Ola 1", "Ola 1", "Ola 2", "Ola 1");
+        assertThat(responses).allSatisfy(r -> assertThat(r.vehicleLicensePlate()).isNotNull());
+        assertThat(shiftService.getShiftsOfDriver(ana, day, day.plusDays(1))).hasSize(2);
+
+        // Aunque el servicio se salte la comprobación (dos peticiones simultáneas), manda la base de datos
+        assertThatThrownBy(() -> shiftAssignmentRepository.saveAndFlush(shift(day, early, ana, van4, admin)))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> shiftAssignmentRepository.saveAndFlush(shift(day, early, dani, van1, admin)))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(shiftAssignmentRepository.count()).isEqualTo(4);
+    }
+
+    @Test
+    void aVehicleWithShiftsCannotBeDeleted() {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Vehicle assigned = saveVehicle("1111AAA", 1000);
+        Vehicle spare = saveVehicle("2222BBB", 2000);
+        Wave wave = saveWave("Ola 1", LocalTime.of(9, 30));
+        shiftService.createShift(
+                new ShiftCreateRequest(LocalDate.of(2026, 11, 19), wave.getId(), driver.getId(), assigned.getId()), admin);
+
+        assertThatThrownBy(() -> vehicleService.deleteVehicle(assigned.getId()))
+                .isInstanceOf(ResourceInUseException.class)
+                .hasMessageContaining("turnos");
+        vehicleService.deleteVehicle(spare.getId());
+
+        assertThat(vehicleRepository.findAll()).extracting(Vehicle::getLicensePlate).containsExactly("1111AAA");
+    }
+
     // ------------------------------------------------------------------ datos de prueba
 
     /**
@@ -683,6 +895,36 @@ class PostgresIntegrationTest {
         InspectionCreateRequest request = new InspectionCreateRequest(
                 vehicle.getId(), kilometers, true, true, true, damages, true, true, true);
         return inspectionService.createInspection(request, odometerPhoto(), null, null, driver);
+    }
+
+    private Wave saveWave(String name, LocalTime startTime) {
+        Wave wave = new Wave();
+        wave.setName(name);
+        wave.setStartTime(startTime);
+        return waveRepository.save(wave);
+    }
+
+    private static ShiftAssignment shift(LocalDate day, Wave wave, User driver, Vehicle van, User createdBy) {
+        ShiftAssignment shift = new ShiftAssignment();
+        shift.setWorkDate(day);
+        shift.setWave(wave);
+        shift.setDriver(driver);
+        shift.setVehicle(van);
+        shift.setCreatedBy(createdBy);
+        return shift;
+    }
+
+    private static String shiftBody(String day, long waveId, User driver, Vehicle van) {
+        return """
+                {"workDate": "%s", "waveId": %d, "driverId": %d, "vehicleId": %d}
+                """.formatted(day, waveId, driver.getId(), van.getId());
+    }
+
+    /** El id de la respuesta JSON de un alta. */
+    private static long idOf(ResultActions result) throws Exception {
+        String body = result.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        Number id = JsonPath.read(body, "$.id");
+        return id.longValue();
     }
 
     private static MockMultipartFile odometerPhoto() {

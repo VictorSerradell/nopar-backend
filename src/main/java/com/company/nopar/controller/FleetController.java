@@ -78,7 +78,7 @@ public class FleetController {
     }
 
     @Operation(summary = "Elimina un vehículo", description = "Solo ADMIN.")
-    @ApiResponse(responseCode = "409", description = "El vehículo tiene partes registrados y no se puede eliminar")
+    @ApiResponse(responseCode = "409", description = "El vehículo tiene partes o turnos registrados y no se puede eliminar")
     @DeleteMapping("/vehicles/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> deleteVehicle(@PathVariable Long id) {

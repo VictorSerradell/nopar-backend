@@ -4,6 +4,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.exception.ResourceNotFoundException;
+import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,7 @@ public class VehicleService {
 
     private final VehicleRepository vehicleRepository;
     private final VehicleInspectionRepository inspectionRepository;
+    private final ShiftAssignmentRepository shiftAssignmentRepository;
 
     @Transactional
     public Vehicle createVehicle(Vehicle vehicle) {
@@ -77,6 +79,10 @@ public class VehicleService {
         if (inspectionRepository.existsByVehicleId(id)) {
             throw new ResourceInUseException(
                     "No se puede eliminar el vehículo " + id + " porque tiene inspecciones registradas");
+        }
+        if (shiftAssignmentRepository.existsByVehicleId(id)) {
+            throw new ResourceInUseException(
+                    "No se puede eliminar el vehículo " + id + " porque tiene turnos asignados");
         }
         vehicleRepository.deleteById(id);
     }
