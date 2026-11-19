@@ -1,0 +1,15 @@
+# Fuera de la imagen: secretos, historial, resultados de compilación y datos locales
+.git
+.gitattributes
+.gitignore
+.github
+.idea
+.vscode
+*.iml
+.env
+.env.*
+target
+uploads
+HELP.md
+*.log
+docker-compose*.yml

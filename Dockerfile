@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+
+# ---------- Etapa 1: compilar el jar ----------
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /workspace
+
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+COPY src/ src/
+RUN chmod +x mvnw
+
+# Los tests necesitan Docker (Testcontainers) y una base de datos: se ejecutan en el CI, no al construir la imagen.
+# La caché de Maven se conserva entre construcciones, así que las dependencias solo se descargan una vez.
+RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q -Dmaven.test.skip=true package
+
+# ---------- Etapa 2: imagen final, solo con el JRE ----------
+FROM eclipse-temurin:21-jre
+RUN groupadd --system nopar \
+    && useradd --system --gid nopar --home-dir /app nopar \
+    && mkdir -p /app /data/uploads \
+    && chown -R nopar:nopar /app /data
+WORKDIR /app
+
+COPY --from=build --chown=nopar:nopar /workspace/target/*.jar app.jar
+
+USER nopar
+
+# La zona horaria importa: los partes guardan la hora local (LocalDateTime.now()) y los trabajos programados
+# (reseteo nocturno, limpieza de tokens) tienen su propia zona en application.yaml.
+# Las fotos van a /data/uploads: monta ahí un volumen para que sobrevivan a recrear el contenedor.
+ENV TZ=Europe/Madrid \
+    APPLICATION_STORAGE_LOCATION=/data/uploads \
+    JAVA_OPTS="-XX:MaxRAMPercentage=75 -Duser.timezone=Europe/Madrid"
+VOLUME /data/uploads
+EXPOSE 8080
+
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

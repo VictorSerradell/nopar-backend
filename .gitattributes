@@ -1,2 +1,6 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+
+# Estos ficheros se leen en Linux (imagen Docker): siempre con saltos de línea LF
+Dockerfile text eol=lf
+.dockerignore text eol=lf

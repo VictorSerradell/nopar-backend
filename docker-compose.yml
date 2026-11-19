@@ -1,0 +1,47 @@
+# PostgreSQL + la API de Nopar.
+#
+#   docker compose up --build -d     # construye la imagen y arranca todo
+#   docker compose logs -f api       # ver el log de la API
+#   docker compose down              # parar (los datos y las fotos se conservan en volúmenes)
+#
+# Las variables salen del fichero .env de esta carpeta, el mismo que usa la aplicación en local (ver .env.example).
+# POSTGRES_PASSWORD solo se aplica al crear el volumen la primera vez: cambiar DB_PASSWORD después no cambia
+# la contraseña de la base de datos ya creada.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fleet_db
+      POSTGRES_USER: postgres # la aplicación se conecta con este usuario (application.yaml)
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en el fichero .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fleet_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/fleet_db
+      DB_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en el fichero .env}
+      JWT_SECRET: ${JWT_SECRET:?Falta JWT_SECRET en el fichero .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      OPENAPI_ENABLED: ${OPENAPI_ENABLED:-true}
+    volumes:
+      - uploads:/data/uploads
+
+volumes:
+  db-data:
+  uploads:
