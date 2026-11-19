@@ -1,6 +1,7 @@
 package com.company.nopar.security;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,7 @@ import org.springframework.security.config.annotation.authentication.configurati
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -19,6 +21,12 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.time.Duration;
+import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -33,6 +41,9 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
+                // usa el bean corsConfigurationSource; en la cadena de seguridad, para que los preflight (OPTIONS, sin
+                // token) se contesten antes de exigir autenticación
+                .cors(Customizer.withDefaults())
                 .authorizeHttpRequests(auth -> auth
                         // login, renovar y cerrar la sesión de este dispositivo: la credencial es el refresh token
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout").permitAll()
@@ -52,6 +63,33 @@ public class SecurityConfig {
     }
 
 
+
+    /**
+     * CORS para el cliente web: el navegador bloquea las llamadas a otro origen (la web en https://app.empresa.com y
+     * la API en otro dominio) salvo que la API lo autorice. Android e iOS no lo necesitan.
+     *
+     * Los orígenes permitidos van en application.security.cors.allowed-origins (variable CORS_ALLOWED_ORIGINS,
+     * separados por comas; admiten patrones como http://localhost:*). Vacío = ningún origen. La autenticación va en la
+     * cabecera Authorization, no en cookies, así que no se permiten credenciales.
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(
+            @Value("${application.security.cors.allowed-origins:}") List<String> allowedOrigins) {
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        List<String> origins = allowedOrigins.stream().map(String::strip).filter(origin -> !origin.isEmpty()).toList();
+        if (origins.isEmpty()) {
+            return source; // sin configuración registrada: ningún origen distinto del propio queda autorizado
+        }
+
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOriginPatterns(origins);
+        config.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        config.setAllowCredentials(false);
+        config.setMaxAge(Duration.ofHours(1)); // el navegador no repite el preflight durante una hora
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
 
     @Bean
     public AuthenticationProvider authenticationProvider() {
