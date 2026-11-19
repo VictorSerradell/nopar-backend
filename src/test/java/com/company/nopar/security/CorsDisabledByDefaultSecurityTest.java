@@ -42,14 +42,16 @@ class CorsDisabledByDefaultSecurityTest {
 
     @Test
     void givenNoAllowedOrigins_whenPreflight_thenNoCorsHeaders() throws Exception {
+        // Sin configuración el filtro CORS contesta el preflight con un 200 vacío y sin cabeceras CORS: lo que
+        // cuenta es que no hay Access-Control-Allow-*, con lo que el navegador no deja pasar la petición real
         MockHttpServletResponse response = mockMvc.perform(options("/api/v1/fleet/vehicles")
                         .header("Origin", "https://app.empresa.com")
                         .header("Access-Control-Request-Method", "GET"))
-                .andExpect(status().is4xxClientError())
                 .andReturn().getResponse();
 
         assertThat(response.getHeader("Access-Control-Allow-Origin")).isNull();
         assertThat(response.getHeader("Access-Control-Allow-Methods")).isNull();
+        assertThat(response.getHeader("Access-Control-Allow-Headers")).isNull();
     }
 
     @Test
