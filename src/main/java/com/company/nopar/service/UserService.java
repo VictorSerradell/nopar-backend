@@ -90,17 +90,17 @@ public class UserService {
     }
 
     /**
-     * Restablecimiento por un administrador: asigna una contraseña nueva a un conductor que ha olvidado la suya y
-     * cierra todas sus sesiones y da de baja sus dispositivos push. No exige la contraseña actual. Solo vale para
-     * conductores: un administrador cambia la suya con su contraseña actual, y así ninguno puede quedarse en silencio
-     * con la cuenta de otro.
+     * Restablecimiento por un administrador: asigna una contraseña nueva a un conductor o a un encargado que ha olvidado
+     * la suya y cierra todas sus sesiones y da de baja sus dispositivos push. No exige la contraseña actual. No vale
+     * para administradores: un administrador cambia la suya con su contraseña actual, y así ninguno puede quedarse en
+     * silencio con la cuenta de otro.
      */
     @Transactional
-    public void resetDriverPassword(Long userId, String newPassword) {
+    public void resetPassword(Long userId, String newPassword) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
-        if (user.getRole() != User.Role.DRIVER) {
-            throw new InvalidRequestException("Solo se puede restablecer la contraseña de un conductor");
+        if (user.getRole() != User.Role.DRIVER && user.getRole() != User.Role.MANAGER) {
+            throw new InvalidRequestException("Solo se puede restablecer la contraseña de un conductor o de un encargado");
         }
         requireWithinBcryptLimit(newPassword, "La nueva contraseña");
 

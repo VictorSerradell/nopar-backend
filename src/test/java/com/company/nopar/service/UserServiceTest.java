@@ -213,12 +213,12 @@ class UserServiceTest {
     // ------------------------------------------------------------------ restablecimiento por un administrador
 
     @Test
-    void givenADriver_whenResetDriverPassword_thenStoresTheNewHashRevokesHisSessionsAndDropsHisDevices() {
+    void givenADriver_whenResetPassword_thenStoresTheNewHashRevokesHisSessionsAndDropsHisDevices() {
         User driver = existingUser("conductor1", "$2a$10$olvidada");
         when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
         when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
 
-        userService.resetDriverPassword(7L, "clave-nueva-456");
+        userService.resetPassword(7L, "clave-nueva-456");
 
         assertThat(driver.getPassword()).isEqualTo("$2a$10$nuevo");
         verify(refreshTokenService).deleteByUser("conductor1");
@@ -228,36 +228,50 @@ class UserServiceTest {
     }
 
     @Test
-    void givenAnAdminAsTarget_whenResetDriverPassword_thenRejectedAndNothingChanges() {
+    void givenAManager_whenResetPassword_thenStoresTheNewHashAndRevokesHisSessionsToo() {
+        User manager = existingUser("encargado1", "$2a$10$olvidada");
+        manager.setRole(User.Role.MANAGER);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(manager));
+        when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
+
+        userService.resetPassword(7L, "clave-nueva-456");
+
+        assertThat(manager.getPassword()).isEqualTo("$2a$10$nuevo");
+        verify(refreshTokenService).deleteByUser("encargado1");
+        verify(deviceService).unregisterAllDevices(7L);
+    }
+
+    @Test
+    void givenAnAdminAsTarget_whenResetPassword_thenRejectedAndNothingChanges() {
         User admin = existingUser("admin", "$2a$10$del-admin");
         admin.setRole(User.Role.ADMIN);
         when(userRepository.findById(7L)).thenReturn(Optional.of(admin));
 
-        assertThatThrownBy(() -> userService.resetDriverPassword(7L, "clave-nueva-456"))
+        assertThatThrownBy(() -> userService.resetPassword(7L, "clave-nueva-456"))
                 .isInstanceOf(InvalidRequestException.class)
-                .hasMessage("Solo se puede restablecer la contraseña de un conductor");
+                .hasMessage("Solo se puede restablecer la contraseña de un conductor o de un encargado");
 
         assertThat(admin.getPassword()).isEqualTo("$2a$10$del-admin");
         verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 
     @Test
-    void givenAnUnknownUser_whenResetDriverPassword_thenNotFound() {
+    void givenAnUnknownUser_whenResetPassword_thenNotFound() {
         when(userRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.resetDriverPassword(99L, "clave-nueva-456"))
+        assertThatThrownBy(() -> userService.resetPassword(99L, "clave-nueva-456"))
                 .isInstanceOf(ResourceNotFoundException.class);
 
         verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 
     @Test
-    void givenAPasswordOver72Bytes_whenResetDriverPassword_thenRejectedAndSessionsStayOpen() {
+    void givenAPasswordOver72Bytes_whenResetPassword_thenRejectedAndSessionsStayOpen() {
         String tooManyBytes = "ñ".repeat(37);
         User driver = existingUser("conductor1", "$2a$10$olvidada");
         when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
 
-        assertThatThrownBy(() -> userService.resetDriverPassword(7L, tooManyBytes))
+        assertThatThrownBy(() -> userService.resetPassword(7L, tooManyBytes))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("72 bytes");
 

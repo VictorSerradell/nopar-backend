@@ -76,6 +76,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -115,7 +116,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V9) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V10) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -252,7 +253,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -680,6 +681,7 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/admin/users/managers'].post").exists())
                 .andExpect(jsonPath("$.components.schemas.WaveCallResponse.properties.recipients").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.acknowledged").exists())
+                .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.canAcknowledge").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
                 .andExpect(jsonPath("$.components.schemas.User").doesNotExist())
                 .andExpect(jsonPath("$.paths..parameters[?(@.name in ['currentUser', 'currentAdmin'])]").isEmpty());
@@ -795,7 +797,7 @@ class PostgresIntegrationTest {
     }
 
     @Test
-    void anAdminResetsADriversPasswordWithoutTheCurrentOneAndOnlyADriversOverHttp() throws Exception {
+    void anAdminResetsADriversOrAManagersPasswordWithoutTheCurrentOneAndNeverAnAdminsOverHttp() throws Exception {
         User driver = userService.createDriver("driver1", "clave-olvidada-1");
         User otherDriver = userService.createDriver("driver2", "otra-clave-123");
         User admin = saveUser("admin1", User.Role.ADMIN);
@@ -831,11 +833,23 @@ class PostgresIntegrationTest {
         login("driver1", "clave-nueva-456").andExpect(status().isOk());
         login("driver2", "otra-clave-123").andExpect(status().isOk());
 
-        // Un administrador no es un conductor: su contraseña se cambia con la actual (PATCH /api/v1/auth/password)
+        // Un encargado que olvidó la suya: se restablece igual y se cierran sus sesiones
+        User manager = userService.createManager("encargado1", "clave-olvidada-2");
+        login("encargado1", "clave-olvidada-2").andExpect(status().isOk());
+        mockMvc.perform(patch("/api/v1/admin/users/" + manager.getId() + "/password")
+                        .with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isNoContent());
+        login("encargado1", "clave-olvidada-2").andExpect(status().isUnauthorized());
+        login("encargado1", "clave-nueva-456").andExpect(status().isOk());
+        // ...pero ni un encargado ni un conductor pueden restablecer la de otro
+        mockMvc.perform(patch(path).with(user(manager)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+
+        // Un administrador no es ni conductor ni encargado: su contraseña se cambia con la actual (PATCH /api/v1/auth/password)
         mockMvc.perform(patch("/api/v1/admin/users/" + admin.getId() + "/password")
                         .with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Solo se puede restablecer la contraseña de un conductor"));
+                .andExpect(jsonPath("$.detail").value("Solo se puede restablecer la contraseña de un conductor o de un encargado"));
 
         // Un usuario que no existe
         mockMvc.perform(patch("/api/v1/admin/users/999999/password")
@@ -1193,6 +1207,8 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.waveName").value("Ola 1"))
                 .andExpect(jsonPath("$.message").value("Subid"))
                 .andExpect(jsonPath("$.calledByUsername").value("encargado1"))
+                .andExpect(jsonPath("$.open").value(true))
+                .andExpect(jsonPath("$.expiresAt").exists())
                 .andExpect(jsonPath("$.recipientCount").value(2))
                 .andExpect(jsonPath("$.acknowledgedCount").value(0))
                 .andExpect(jsonPath("$.recipients[0].driverUsername").value("ana"))
@@ -1216,7 +1232,8 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].id").value(callId))
                 .andExpect(jsonPath("$[0].vehicleLicensePlate").value("1111AAA"))
-                .andExpect(jsonPath("$[0].acknowledged").value(false));
+                .andExpect(jsonPath("$[0].acknowledged").value(false))
+                .andExpect(jsonPath("$[0].canAcknowledge").value(true));
         mockMvc.perform(get("/api/v1/wave-calls/me").with(user(cris)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));
@@ -1226,7 +1243,8 @@ class PostgresIntegrationTest {
                 .andExpect(status().isForbidden());
         String firstAck = field(mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(ana)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.acknowledged").value(true)), "acknowledgedAt");
+                .andExpect(jsonPath("$.acknowledged").value(true))
+                .andExpect(jsonPath("$.canAcknowledge").value(false)), "acknowledgedAt");
         mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(ana)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.acknowledgedAt").value(firstAck));
@@ -1245,6 +1263,24 @@ class PostgresIntegrationTest {
                     .andExpect(jsonPath("$.recipients[1].driverUsername").value("bea"))
                     .andExpect(jsonPath("$.recipients[1].acknowledged").value(false));
         }
+
+        // Pasada la ventana la orden caduca: Bea ya no puede confirmar y su llamada deja de ofrecer «Enterado»;
+        // Ana, que confirmó a tiempo, sigue constando con su hora
+        new JdbcTemplate(dataSource).update("update wave_calls set expires_at = ? where id = ?",
+                Timestamp.valueOf(LocalDateTime.now().minusMinutes(1)), callId);
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(bea)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(get("/api/v1/wave-calls/me").with(user(bea)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].acknowledged").value(false))
+                .andExpect(jsonPath("$[0].canAcknowledge").value(false));
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.acknowledgedAt").value(firstAck));
+        mockMvc.perform(get("/api/v1/dispatch/wave-calls/{id}", callId).with(user(manager)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.open").value(false))
+                .andExpect(jsonPath("$.acknowledgedCount").value(1));
 
         // Una segunda llamada el mismo dia, con otro texto: es otra llamada, sin confirmar, y sale la primera
         mockMvc.perform(post(callUrl, wave1.getId()).with(user(admin)).contentType(json)

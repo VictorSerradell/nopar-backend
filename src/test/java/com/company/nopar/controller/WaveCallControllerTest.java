@@ -4,6 +4,7 @@ import com.company.nopar.entity.User;
 import com.company.nopar.entity.Wave;
 import com.company.nopar.entity.WaveCall;
 import com.company.nopar.entity.WaveCallRecipient;
+import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.security.JwtAuthenticationFilter;
 import com.company.nopar.security.JwtService;
@@ -65,7 +66,7 @@ class WaveCallControllerTest {
     @Test
     void givenADriver_whenGetMyCalls_thenTheServiceGetsTheDriverOfTheTokenAndToday() throws Exception {
         when(waveCallService.getCallsOfDriver(any(User.class), any(LocalDate.class)))
-                .thenReturn(List.of(recipient(null)));
+                .thenReturn(List.of(recipient(null, LocalDateTime.now().plusMinutes(30))));
 
         mockMvc.perform(get("/api/v1/wave-calls/me").with(user(driver())))
                 .andExpect(status().isOk())
@@ -78,9 +79,26 @@ class WaveCallControllerTest {
                 .andExpect(jsonPath("$[0].vehicleLicensePlate").value("1111AAA"))
                 .andExpect(jsonPath("$[0].acknowledged").value(false))
                 .andExpect(jsonPath("$[0].acknowledgedAt").doesNotExist())
+                .andExpect(jsonPath("$[0].expiresAt").exists())
+                // aún vigente y sin confirmar: la app enseña el botón «Enterado»
+                .andExpect(jsonPath("$[0].canAcknowledge").value(true))
                 .andExpect(jsonPath("$..password").isEmpty());
 
         verify(waveCallService).getCallsOfDriver(argThat(u -> "ana".equals(u.getUsername())), eq(LocalDate.now()));
+    }
+
+    @Test
+    void givenAnExpiredOrAnAcknowledgedCall_whenGetMyCalls_thenTheAppIsNotToldToOfferEnterado() throws Exception {
+        when(waveCallService.getCallsOfDriver(any(User.class), any(LocalDate.class))).thenReturn(List.of(
+                recipient(null, LocalDateTime.now().minusMinutes(1)),
+                recipient(LocalDateTime.now().minusMinutes(5), LocalDateTime.now().plusMinutes(30))));
+
+        mockMvc.perform(get("/api/v1/wave-calls/me").with(user(driver())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].acknowledged").value(false))
+                .andExpect(jsonPath("$[0].canAcknowledge").value(false))
+                .andExpect(jsonPath("$[1].acknowledged").value(true))
+                .andExpect(jsonPath("$[1].canAcknowledge").value(false));
     }
 
     @Test
@@ -114,7 +132,7 @@ class WaveCallControllerTest {
     @Test
     void givenADriver_whenAcknowledge_thenTheServiceGetsTheDriverOfTheTokenAndTheAnswerIsConfirmed() throws Exception {
         when(waveCallService.acknowledge(eq(7L), any(User.class)))
-                .thenReturn(recipient(LocalDateTime.of(2026, 11, 24, 9, 26)));
+                .thenReturn(recipient(LocalDateTime.of(2026, 11, 24, 9, 26), LocalDateTime.of(2026, 11, 24, 10, 25)));
 
         mockMvc.perform(post("/api/v1/wave-calls/7/acknowledge").with(user(driver())))
                 .andExpect(status().isOk())
@@ -143,6 +161,16 @@ class WaveCallControllerTest {
     }
 
     @Test
+    void givenTheOrderHasExpired_whenAcknowledge_thenConflict() throws Exception {
+        when(waveCallService.acknowledge(eq(7L), any(User.class)))
+                .thenThrow(new InvalidStateException("La orden de Ola 1 ya caducó: ya no se puede confirmar"));
+
+        mockMvc.perform(post("/api/v1/wave-calls/7/acknowledge").with(user(driver())))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("La orden de Ola 1 ya caducó: ya no se puede confirmar"));
+    }
+
+    @Test
     void givenAnUnknownCall_whenAcknowledge_thenNotFound() throws Exception {
         when(waveCallService.acknowledge(eq(8L), any(User.class)))
                 .thenThrow(new ResourceNotFoundException("Llamada no encontrada con ID: 8"));
@@ -166,7 +194,7 @@ class WaveCallControllerTest {
         return user;
     }
 
-    private static WaveCallRecipient recipient(LocalDateTime acknowledgedAt) {
+    private static WaveCallRecipient recipient(LocalDateTime acknowledgedAt, LocalDateTime expiresAt) {
         Wave wave = new Wave();
         wave.setId(1L);
         wave.setName("Ola 1");
@@ -179,6 +207,7 @@ class WaveCallControllerTest {
         call.setMessage("Subid");
         call.setCalledBy(newUser(5L, "encargado1", User.Role.MANAGER));
         call.setCalledAt(LocalDateTime.of(2026, 11, 24, 9, 25));
+        call.setExpiresAt(expiresAt);
 
         WaveCallRecipient recipient = new WaveCallRecipient();
         recipient.setWaveCall(call);

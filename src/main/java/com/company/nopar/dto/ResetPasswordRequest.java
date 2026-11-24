@@ -4,8 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 /**
- * Restablecimiento de la contraseña de un conductor por un administrador. No lleva la contraseña actual:
- * el conductor la ha olvidado. La longitud sigue la misma regla que el alta.
+ * Restablecimiento de la contraseña de un conductor o de un encargado por un administrador. No lleva la contraseña
+ * actual: quien la tenía la ha olvidado. La longitud sigue la misma regla que el alta.
  */
 public record ResetPasswordRequest(
         @NotBlank(message = "La nueva contraseña es obligatoria")

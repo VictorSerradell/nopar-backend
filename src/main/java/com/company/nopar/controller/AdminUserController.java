@@ -45,14 +45,14 @@ public class AdminUserController {
         return ResponseEntity.status(HttpStatus.CREATED).body(UserResponse.from(created));
     }
 
-    @Operation(summary = "Restablece la contraseña de un conductor",
-            description = "Para un conductor que ha olvidado la suya: no exige la contraseña actual y cierra todas sus sesiones (revoca sus refresh tokens y da de baja sus dispositivos push). Solo vale para conductores; los administradores cambian la suya con PATCH /api/v1/auth/password.")
-    @ApiResponse(responseCode = "400", description = "El usuario no es un conductor o la nueva contraseña no es válida")
+    @Operation(summary = "Restablece la contraseña de un conductor o de un encargado",
+            description = "Para quien ha olvidado la suya: no exige la contraseña actual y cierra todas sus sesiones (revoca sus refresh tokens y da de baja sus dispositivos push). Vale para conductores y encargados; los administradores cambian la suya con PATCH /api/v1/auth/password.")
+    @ApiResponse(responseCode = "400", description = "El usuario no es un conductor ni un encargado, o la nueva contraseña no es válida")
     @ApiResponse(responseCode = "404", description = "No existe ese usuario")
     @PatchMapping("/{id}/password")
-    public ResponseEntity<Void> resetDriverPassword(@PathVariable Long id,
-                                                    @Valid @RequestBody ResetPasswordRequest request) {
-        userService.resetDriverPassword(id, request.newPassword());
+    public ResponseEntity<Void> resetPassword(@PathVariable Long id,
+                                              @Valid @RequestBody ResetPasswordRequest request) {
+        userService.resetPassword(id, request.newPassword());
         return ResponseEntity.noContent().build();
     }
 }

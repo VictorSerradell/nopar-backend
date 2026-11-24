@@ -118,7 +118,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    void givenValidPassword_whenResetDriverPassword_thenNoContent() throws Exception {
+    void givenValidPassword_whenResetPassword_thenNoContent() throws Exception {
         mockMvc.perform(patch("/api/v1/admin/users/10/password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -126,11 +126,11 @@ class AdminUserControllerTest {
                                 """))
                 .andExpect(status().isNoContent());
 
-        verify(userService).resetDriverPassword(10L, "clave-nueva-456");
+        verify(userService).resetPassword(10L, "clave-nueva-456");
     }
 
     @Test
-    void givenShortPassword_whenResetDriverPassword_thenBadRequestWithFieldError() throws Exception {
+    void givenShortPassword_whenResetPassword_thenBadRequestWithFieldError() throws Exception {
         mockMvc.perform(patch("/api/v1/admin/users/10/password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -143,9 +143,9 @@ class AdminUserControllerTest {
     }
 
     @Test
-    void givenUnknownUser_whenResetDriverPassword_thenNotFound() throws Exception {
+    void givenUnknownUser_whenResetPassword_thenNotFound() throws Exception {
         doThrow(new ResourceNotFoundException("Usuario no encontrado"))
-                .when(userService).resetDriverPassword(99L, "clave-nueva-456");
+                .when(userService).resetPassword(99L, "clave-nueva-456");
 
         mockMvc.perform(patch("/api/v1/admin/users/99/password")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -157,9 +157,9 @@ class AdminUserControllerTest {
     }
 
     @Test
-    void givenAnAdminAsTarget_whenResetDriverPassword_thenBadRequest() throws Exception {
-        doThrow(new InvalidRequestException("Solo se puede restablecer la contraseña de un conductor"))
-                .when(userService).resetDriverPassword(1L, "clave-nueva-456");
+    void givenAnAdminAsTarget_whenResetPassword_thenBadRequest() throws Exception {
+        doThrow(new InvalidRequestException("Solo se puede restablecer la contraseña de un conductor o de un encargado"))
+                .when(userService).resetPassword(1L, "clave-nueva-456");
 
         mockMvc.perform(patch("/api/v1/admin/users/1/password")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -167,6 +167,6 @@ class AdminUserControllerTest {
                                 {"newPassword": "clave-nueva-456"}
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Solo se puede restablecer la contraseña de un conductor"));
+                .andExpect(jsonPath("$.detail").value("Solo se puede restablecer la contraseña de un conductor o de un encargado"));
     }
 }

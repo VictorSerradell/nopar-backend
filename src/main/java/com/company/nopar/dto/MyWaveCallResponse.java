@@ -20,10 +20,20 @@ public record MyWaveCallResponse(
         LocalDateTime calledAt,
         String vehicleLicensePlate,
         boolean acknowledged,
-        LocalDateTime acknowledgedAt
+        LocalDateTime acknowledgedAt,
+        LocalDateTime expiresAt,
+        boolean canAcknowledge
 ) {
 
     public static MyWaveCallResponse from(WaveCallRecipient recipient) {
+        return from(recipient, LocalDateTime.now());
+    }
+
+    /**
+     * canAcknowledge es lo que decide si la app enseña el botón «Enterado»: la orden aún no se ha confirmado y sigue
+     * vigente en ese momento (lo calcula el servidor, para no depender del reloj del móvil).
+     */
+    public static MyWaveCallResponse from(WaveCallRecipient recipient, LocalDateTime now) {
         WaveCall call = recipient.getWaveCall();
         return new MyWaveCallResponse(
                 call.getId(),
@@ -36,10 +46,13 @@ public record MyWaveCallResponse(
                 call.getCalledAt(),
                 recipient.getVehicleLicensePlate(),
                 recipient.isAcknowledged(),
-                recipient.getAcknowledgedAt());
+                recipient.getAcknowledgedAt(),
+                call.getExpiresAt(),
+                !recipient.isAcknowledged() && call.isOpenAt(now));
     }
 
     public static List<MyWaveCallResponse> fromAll(List<WaveCallRecipient> recipients) {
-        return recipients.stream().map(MyWaveCallResponse::from).toList();
+        LocalDateTime now = LocalDateTime.now();
+        return recipients.stream().map(recipient -> from(recipient, now)).toList();
     }
 }

@@ -40,6 +40,7 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       OPENAPI_ENABLED: ${OPENAPI_ENABLED:-true}
       SHOW_SQL: ${SHOW_SQL:-false}
+      WAVE_CALL_ACK_WINDOW_MINUTES: ${WAVE_CALL_ACK_WINDOW_MINUTES:-60}
       FCM_ENABLED: ${FCM_ENABLED:-false}
       # Ruta dentro del contenedor: la carpeta ./secrets se monta en /run/secrets/nopar (ver .env.example)
       FCM_CREDENTIALS_FILE: /run/secrets/nopar/firebase-service-account.json

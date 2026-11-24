@@ -103,6 +103,9 @@ class DispatchControllerTest {
                 .andExpect(jsonPath("$.workDate").value("2026-11-24"))
                 .andExpect(jsonPath("$.message").value("Subid"))
                 .andExpect(jsonPath("$.calledByUsername").value("encargado1"))
+                .andExpect(jsonPath("$.expiresAt", startsWith("2026-11-24T10:25")))
+                // la llamada de la prueba es de 2026 y ya caducó: ya no se puede confirmar
+                .andExpect(jsonPath("$.open").value(false))
                 .andExpect(jsonPath("$.recipientCount").value(2))
                 .andExpect(jsonPath("$.acknowledgedCount").value(1))
                 // ordenados por nombre: ana (aún no ha confirmado) y bea (ya confirmó)
@@ -257,6 +260,7 @@ class DispatchControllerTest {
         call.setMessage("Subid");
         call.setCalledBy(manager());
         call.setCalledAt(LocalDateTime.of(2026, 11, 24, 9, 25));
+        call.setExpiresAt(LocalDateTime.of(2026, 11, 24, 10, 25));
         call.getRecipients().add(recipient(call, 3L, "bea", "2222BBB", LocalDateTime.of(2026, 11, 24, 9, 26)));
         call.getRecipients().add(recipient(call, 2L, "ana", "1111AAA", null));
         return call;

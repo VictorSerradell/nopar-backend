@@ -44,6 +44,15 @@ public class WaveCall {
     @Column(name = "called_at", nullable = false)
     private LocalDateTime calledAt = LocalDateTime.now();
 
+    /** Hasta cuándo vale la orden: pasado ese momento los conductores ya no pueden confirmarla con "Enterado". */
+    @Column(name = "expires_at", nullable = false)
+    private LocalDateTime expiresAt;
+
     @OneToMany(mappedBy = "waveCall", cascade = CascadeType.ALL)
     private List<WaveCallRecipient> recipients = new ArrayList<>();
+
+    /** Si en ese momento la orden sigue vigente, es decir, si todavía se puede confirmar. */
+    public boolean isOpenAt(LocalDateTime moment) {
+        return expiresAt != null && moment.isBefore(expiresAt);
+    }
 }

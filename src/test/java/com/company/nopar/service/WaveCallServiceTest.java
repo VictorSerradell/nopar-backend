@@ -75,6 +75,8 @@ class WaveCallServiceTest {
         assertThat(call.getWorkDate()).isEqualTo(LocalDate.now());
         assertThat(call.getMessage()).isEqualTo("Subid ya");
         assertThat(call.getCalledBy()).isSameAs(manager);
+        // la orden vale una hora desde que se da (la ventana por defecto)
+        assertThat(call.getExpiresAt()).isEqualTo(call.getCalledAt().plusHours(1));
         assertThat(call.getRecipients()).extracting(r -> r.getDriver().getUsername(), WaveCallRecipient::getVehicleLicensePlate)
                 .containsExactly(tuple("ana", "1111AAA"),
                         tuple("bea", "2222BBB"));
@@ -87,6 +89,27 @@ class WaveCallServiceTest {
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue()).isEqualTo(
                 new WaveCalledEvent(9L, 1L, "Ola 1", LocalDate.now(), "Subid ya", List.of(2L, 3L)));
+    }
+
+    @Test
+    void givenAConfiguredWindow_whenCallWave_thenTheOrderExpiresAfterIt() {
+        Wave wave = wave(1L, "Ola 1");
+        givenShiftsToday(wave, shift(wave, 2L, "ana", "1111AAA"));
+        givenSaveAssignsId(9L);
+        service.setAcknowledgeWindowMinutes(15);
+
+        WaveCall call = service.callWave(1L, "Subid", user(5L, "encargado1", User.Role.MANAGER));
+
+        assertThat(call.getExpiresAt()).isEqualTo(call.getCalledAt().plusMinutes(15));
+    }
+
+    @Test
+    void givenAWindowThatIsNotPositive_whenConfigure_thenFailsSoTheAppDoesNotStartWithOrdersThatNeverWork() {
+        assertThatThrownBy(() -> service.setAcknowledgeWindowMinutes(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("acknowledge-window-minutes");
+        assertThatThrownBy(() -> service.setAcknowledgeWindowMinutes(-5))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -154,7 +177,7 @@ class WaveCallServiceTest {
 
     @Test
     void givenARecipient_whenAcknowledge_thenTheConfirmationTimeIsStored() {
-        WaveCallRecipient recipient = recipient(null);
+        WaveCallRecipient recipient = recipient(null, LocalDateTime.now().plusMinutes(30));
         when(callRepository.existsById(7L)).thenReturn(true);
         when(recipientRepository.findOfDriver(7L, 2L)).thenReturn(Optional.of(recipient));
 
@@ -169,13 +192,37 @@ class WaveCallServiceTest {
     @Test
     void givenAlreadyAcknowledged_whenAcknowledgeAgain_thenTheFirstTimeIsKept() {
         LocalDateTime first = LocalDateTime.of(2026, 11, 24, 9, 26);
-        WaveCallRecipient recipient = recipient(first);
+        WaveCallRecipient recipient = recipient(first, LocalDateTime.now().plusMinutes(30));
         when(callRepository.existsById(7L)).thenReturn(true);
         when(recipientRepository.findOfDriver(7L, 2L)).thenReturn(Optional.of(recipient));
 
         WaveCallRecipient result = service.acknowledge(7L, user(2L, "ana", User.Role.DRIVER));
 
         assertThat(result.getAcknowledgedAt()).isEqualTo(first);
+    }
+
+    @Test
+    void givenTheOrderHasExpired_whenAcknowledge_thenConflictAndNothingIsStored() {
+        WaveCallRecipient recipient = recipient(null, LocalDateTime.now().minusMinutes(1));
+        when(callRepository.existsById(7L)).thenReturn(true);
+        when(recipientRepository.findOfDriver(7L, 2L)).thenReturn(Optional.of(recipient));
+
+        assertThatThrownBy(() -> service.acknowledge(7L, user(2L, "ana", User.Role.DRIVER)))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("Ola 1")
+                .hasMessageContaining("caducó");
+
+        assertThat(recipient.isAcknowledged()).isFalse();
+    }
+
+    @Test
+    void givenAlreadyAcknowledgedInTimeAndTheOrderExpiredSince_whenAcknowledgeAgain_thenTheFirstConfirmationIsReturnedWithoutError() {
+        LocalDateTime first = LocalDateTime.now().minusMinutes(50);
+        WaveCallRecipient recipient = recipient(first, LocalDateTime.now().minusMinutes(1));
+        when(callRepository.existsById(7L)).thenReturn(true);
+        when(recipientRepository.findOfDriver(7L, 2L)).thenReturn(Optional.of(recipient));
+
+        assertThat(service.acknowledge(7L, user(2L, "ana", User.Role.DRIVER)).getAcknowledgedAt()).isEqualTo(first);
     }
 
     @Test
@@ -213,8 +260,14 @@ class WaveCallServiceTest {
         });
     }
 
-    private static WaveCallRecipient recipient(LocalDateTime acknowledgedAt) {
+    /** Un destinatario de una llamada a "Ola 1" que vale hasta expiresAt. */
+    private static WaveCallRecipient recipient(LocalDateTime acknowledgedAt, LocalDateTime expiresAt) {
+        WaveCall call = new WaveCall();
+        call.setId(7L);
+        call.setWave(wave(1L, "Ola 1"));
+        call.setExpiresAt(expiresAt);
         WaveCallRecipient recipient = new WaveCallRecipient();
+        recipient.setWaveCall(call);
         recipient.setAcknowledgedAt(acknowledgedAt);
         return recipient;
     }
