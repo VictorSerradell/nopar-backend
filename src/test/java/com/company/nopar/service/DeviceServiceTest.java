@@ -13,11 +13,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class DeviceServiceTest {
@@ -49,6 +51,15 @@ class DeviceServiceTest {
         deviceService.unregisterDevice(driver(7L), " token-abc ");
 
         verify(deviceTokenRepository).deleteByTokenAndUserId("token-abc", 7L);
+    }
+
+    @Test
+    void whenUnregisterAllDevices_thenEveryDeviceOfThatUserIsDeletedAndTheCountIsReturned() {
+        when(deviceTokenRepository.deleteAllByUserId(7L)).thenReturn(3);
+
+        assertThat(deviceService.unregisterAllDevices(7L)).isEqualTo(3);
+
+        verify(deviceTokenRepository).deleteAllByUserId(7L);
     }
 
     @Test

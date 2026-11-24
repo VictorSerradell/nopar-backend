@@ -81,7 +81,7 @@ public class AuthController {
      * sesión; el cliente debe guardar los nuevos y descartar los anteriores.
      */
     @Operation(summary = "Cambia la contraseña",
-            description = "Exige la contraseña actual. Revoca todos los refresh tokens del usuario (en todos sus dispositivos) y devuelve un par de tokens nuevo para este: el cliente debe guardarlo y descartar el anterior. Los access tokens ya emitidos valen hasta que caduquen (15 minutos).")
+            description = "Exige la contraseña actual. Revoca todos los refresh tokens del usuario (en todos sus dispositivos) y devuelve un par de tokens nuevo para este: el cliente debe guardarlo y descartar el anterior. También da de baja todos sus dispositivos push, este incluido: la app debe volver a registrarlo con POST /api/v1/devices. Los access tokens ya emitidos valen hasta que caduquen (15 minutos).")
     @ApiResponse(responseCode = "400", description = "Contraseña actual incorrecta, nueva contraseña no válida o igual a la actual. Es un 400 y no un 401: el usuario sigue autenticado")
     @PatchMapping("/password")
     public ResponseEntity<TokenResponse> changePassword(@AuthenticationPrincipal User currentUser,

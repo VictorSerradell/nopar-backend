@@ -46,6 +46,11 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
     @Query("delete from DeviceToken d where d.token = :token and d.user.id = :userId")
     int deleteByTokenAndUserId(@Param("token") String token, @Param("userId") Long userId);
 
+    /** Borra todos los dispositivos del usuario (al cambiar o restablecer su contraseña); devuelve cuántos. */
+    @Modifying
+    @Query("delete from DeviceToken d where d.user.id = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
+
     /** Los tokens de todos los dispositivos de los usuarios con ese rol: a quién se envía un aviso. */
     @Query("select d.token from DeviceToken d where d.user.role = :role order by d.id")
     List<String> findTokensByUserRole(@Param("role") User.Role role);

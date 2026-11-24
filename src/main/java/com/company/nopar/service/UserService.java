@@ -23,6 +23,7 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
+    private final DeviceService deviceService;
 
     @Transactional
     public User createDriver(String username, String rawPassword) {
@@ -54,6 +55,9 @@ public class UserService {
      * refresh tokens en la misma transacción, para que quien entrara con la contraseña anterior no pueda seguir
      * renovando su sesión. Los access tokens ya emitidos valen hasta que caduquen (15 minutos).
      *
+     * También da de baja todos sus dispositivos push, el de quien cambia la contraseña incluido: la app debe volver
+     * a registrarlo (POST /api/v1/devices) con los tokens nuevos.
+     *
      * Los datos incorrectos son un 400 (InvalidRequestException) y no un 401: el usuario SÍ está autenticado, y un 401
      * haría que el cliente intentara renovar el token o cerrara la sesión.
      */
@@ -74,14 +78,16 @@ public class UserService {
         // Primero se calcula y se revocan las sesiones; la contraseña se asigna al final, ya sin más consultas
         String newHash = passwordEncoder.encode(newPassword);
         refreshTokenService.deleteByUser(user.getUsername());
+        deviceService.unregisterAllDevices(user.getId());
         user.setPassword(newHash);
         return user;
     }
 
     /**
      * Restablecimiento por un administrador: asigna una contraseña nueva a un conductor que ha olvidado la suya y
-     * cierra todas sus sesiones. No exige la contraseña actual. Solo vale para conductores: un administrador cambia
-     * la suya con su contraseña actual, y así ninguno puede quedarse en silencio con la cuenta de otro.
+     * cierra todas sus sesiones y da de baja sus dispositivos push. No exige la contraseña actual. Solo vale para
+     * conductores: un administrador cambia la suya con su contraseña actual, y así ninguno puede quedarse en silencio
+     * con la cuenta de otro.
      */
     @Transactional
     public void resetDriverPassword(Long userId, String newPassword) {
@@ -94,6 +100,7 @@ public class UserService {
 
         String newHash = passwordEncoder.encode(newPassword);
         refreshTokenService.deleteByUser(user.getUsername());
+        deviceService.unregisterAllDevices(user.getId());
         user.setPassword(newHash);
     }
 

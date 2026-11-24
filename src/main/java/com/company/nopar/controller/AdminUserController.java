@@ -37,7 +37,7 @@ public class AdminUserController {
     }
 
     @Operation(summary = "Restablece la contraseña de un conductor",
-            description = "Para un conductor que ha olvidado la suya: no exige la contraseña actual y cierra todas sus sesiones (revoca sus refresh tokens). Solo vale para conductores; los administradores cambian la suya con PATCH /api/v1/auth/password.")
+            description = "Para un conductor que ha olvidado la suya: no exige la contraseña actual y cierra todas sus sesiones (revoca sus refresh tokens y da de baja sus dispositivos push). Solo vale para conductores; los administradores cambian la suya con PATCH /api/v1/auth/password.")
     @ApiResponse(responseCode = "400", description = "El usuario no es un conductor o la nueva contraseña no es válida")
     @ApiResponse(responseCode = "404", description = "No existe ese usuario")
     @PatchMapping("/{id}/password")

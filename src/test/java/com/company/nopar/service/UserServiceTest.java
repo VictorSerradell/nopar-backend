@@ -36,6 +36,9 @@ class UserServiceTest {
     @Mock
     private RefreshTokenService refreshTokenService;
 
+    @Mock
+    private DeviceService deviceService;
+
     @InjectMocks
     private UserService userService;
 
@@ -91,7 +94,7 @@ class UserServiceTest {
     // ------------------------------------------------------------------ cambio de contraseña
 
     @Test
-    void givenTheCurrentPassword_whenChangePassword_thenStoresTheNewHashAndRevokesEverySession() {
+    void givenTheCurrentPassword_whenChangePassword_thenStoresTheNewHashRevokesEverySessionAndDropsTheDevices() {
         User user = existingUser("conductor1", "$2a$10$viejo");
         when(userRepository.findById(7L)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("clave-vieja-123", "$2a$10$viejo")).thenReturn(true);
@@ -102,6 +105,7 @@ class UserServiceTest {
         assertThat(result).isSameAs(user);
         assertThat(user.getPassword()).isEqualTo("$2a$10$nuevo");
         verify(refreshTokenService).deleteByUser("conductor1");
+        verify(deviceService).unregisterAllDevices(7L);
     }
 
     @Test
@@ -116,7 +120,7 @@ class UserServiceTest {
 
         assertThat(user.getPassword()).isEqualTo("$2a$10$viejo");
         verify(passwordEncoder, never()).encode(any());
-        verifyNoInteractions(refreshTokenService);
+        verifyNoInteractions(refreshTokenService, deviceService);
     }
 
     @Test
@@ -131,7 +135,7 @@ class UserServiceTest {
 
         assertThat(user.getPassword()).isEqualTo("$2a$10$viejo");
         verify(passwordEncoder, never()).encode(any());
-        verifyNoInteractions(refreshTokenService);
+        verifyNoInteractions(refreshTokenService, deviceService);
     }
 
     @Test
@@ -148,7 +152,7 @@ class UserServiceTest {
 
         assertThat(user.getPassword()).isEqualTo("$2a$10$viejo");
         verify(passwordEncoder, never()).encode(any());
-        verifyNoInteractions(refreshTokenService);
+        verifyNoInteractions(refreshTokenService, deviceService);
     }
 
     @Test
@@ -160,7 +164,7 @@ class UserServiceTest {
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessage("La contraseña actual no es correcta");
 
-        verifyNoInteractions(passwordEncoder, refreshTokenService);
+        verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 
     @Test
@@ -170,7 +174,7 @@ class UserServiceTest {
         assertThatThrownBy(() -> userService.changePassword(99L, "clave-vieja-123", "clave-nueva-456"))
                 .isInstanceOf(ResourceNotFoundException.class);
 
-        verifyNoInteractions(passwordEncoder, refreshTokenService);
+        verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 
     private static User existingUser(String username, String passwordHash) {
@@ -197,7 +201,7 @@ class UserServiceTest {
     // ------------------------------------------------------------------ restablecimiento por un administrador
 
     @Test
-    void givenADriver_whenResetDriverPassword_thenStoresTheNewHashAndRevokesHisSessions() {
+    void givenADriver_whenResetDriverPassword_thenStoresTheNewHashRevokesHisSessionsAndDropsHisDevices() {
         User driver = existingUser("conductor1", "$2a$10$olvidada");
         when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
         when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
@@ -206,6 +210,7 @@ class UserServiceTest {
 
         assertThat(driver.getPassword()).isEqualTo("$2a$10$nuevo");
         verify(refreshTokenService).deleteByUser("conductor1");
+        verify(deviceService).unregisterAllDevices(7L);
         // el administrador no necesita conocer la contraseña anterior
         verify(passwordEncoder, never()).matches(any(), any());
     }
@@ -221,7 +226,7 @@ class UserServiceTest {
                 .hasMessage("Solo se puede restablecer la contraseña de un conductor");
 
         assertThat(admin.getPassword()).isEqualTo("$2a$10$del-admin");
-        verifyNoInteractions(passwordEncoder, refreshTokenService);
+        verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 
     @Test
@@ -231,7 +236,7 @@ class UserServiceTest {
         assertThatThrownBy(() -> userService.resetDriverPassword(99L, "clave-nueva-456"))
                 .isInstanceOf(ResourceNotFoundException.class);
 
-        verifyNoInteractions(passwordEncoder, refreshTokenService);
+        verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 
     @Test
@@ -245,6 +250,6 @@ class UserServiceTest {
                 .hasMessageContaining("72 bytes");
 
         assertThat(driver.getPassword()).isEqualTo("$2a$10$olvidada");
-        verifyNoInteractions(passwordEncoder, refreshTokenService);
+        verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
     }
 }

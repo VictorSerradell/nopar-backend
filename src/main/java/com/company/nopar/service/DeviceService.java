@@ -43,4 +43,13 @@ public class DeviceService {
     public void unregisterDevice(User user, String token) {
         deviceTokenRepository.deleteByTokenAndUserId(token.strip(), user.getId());
     }
+
+    /**
+     * Da de baja todos los dispositivos del usuario. Se usa al cambiar o restablecer su contraseña: cierra todas sus
+     * sesiones, y un móvil que ya no tiene sesión no debe seguir recibiendo sus avisos.
+     */
+    @Transactional
+    public int unregisterAllDevices(Long userId) {
+        return deviceTokenRepository.deleteAllByUserId(userId);
+    }
 }

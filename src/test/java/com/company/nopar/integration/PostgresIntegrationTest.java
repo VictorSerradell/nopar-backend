@@ -711,7 +711,11 @@ class PostgresIntegrationTest {
 
     @Test
     void changingThePasswordKeepsThisDeviceLoggedInAndClosesEveryOtherSession() throws Exception {
-        userService.createDriver("driver1", "clave-vieja-123");
+        User driver = userService.createDriver("driver1", "clave-vieja-123");
+        User other = userService.createDriver("driver2", "otra-clave-123");
+        deviceService.registerDevice(driver, "tok-driver1-movil", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(driver, "tok-driver1-tablet", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(other, "tok-driver2", DeviceToken.Platform.IOS);
 
         // Dos dispositivos con la sesión iniciada de verdad: login contra la BD, con BCrypt y JWT reales
         ResultActions phone = login("driver1", "clave-vieja-123").andExpect(status().isOk());
@@ -734,6 +738,7 @@ class PostgresIntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("La contraseña actual no es correcta"));
         assertThat(refreshTokenRepository.count()).isEqualTo(2);
+        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isEqualTo(2);
 
         // Con la actual correcta: 200 y un par de tokens nuevo para este dispositivo
         ResultActions changed = mockMvc.perform(patch("/api/v1/auth/password")
@@ -748,6 +753,10 @@ class PostgresIntegrationTest {
 
         // Todas las sesiones anteriores quedan cerradas: solo sobrevive el refresh token recién emitido
         assertThat(refreshTokenRepository.count()).isEqualTo(1);
+
+        // Y los dispositivos push del usuario se dan de baja (la app vuelve a registrar el suyo); los de otro, no
+        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isZero();
+        assertThat(deviceTokenRepository.countByUserId(other.getId())).isEqualTo(1);
         assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(phoneRefresh))
                 .isInstanceOf(InvalidRefreshTokenException.class);
         assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(tabletRefresh))
@@ -777,6 +786,9 @@ class PostgresIntegrationTest {
         login("driver1", "clave-olvidada-1").andExpect(status().isOk());
         login("driver2", "otra-clave-123").andExpect(status().isOk());
         assertThat(refreshTokenRepository.count()).isEqualTo(3);
+        deviceService.registerDevice(driver, "tok-driver1-movil", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(driver, "tok-driver1-web", DeviceToken.Platform.WEB);
+        deviceService.registerDevice(otherDriver, "tok-driver2", DeviceToken.Platform.IOS);
 
         String body = "{\"newPassword\": \"clave-nueva-456\"}";
         String path = "/api/v1/admin/users/" + driver.getId() + "/password";
@@ -787,11 +799,15 @@ class PostgresIntegrationTest {
         mockMvc.perform(patch(path).with(user(otherDriver)).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isForbidden());
         assertThat(refreshTokenRepository.count()).isEqualTo(3);
+        assertThat(deviceTokenRepository.count()).isEqualTo(3);
 
         // El administrador la restablece: 204 y se cierran las sesiones de ESE conductor, no las del otro
         mockMvc.perform(patch(path).with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isNoContent());
         assertThat(refreshTokenRepository.count()).isEqualTo(1);
+        // ...y sus dispositivos push, no los del otro conductor
+        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isZero();
+        assertThat(deviceTokenRepository.countByUserId(otherDriver.getId())).isEqualTo(1);
         login("driver1", "clave-olvidada-1").andExpect(status().isUnauthorized());
         login("driver1", "clave-nueva-456").andExpect(status().isOk());
         login("driver2", "otra-clave-123").andExpect(status().isOk());
