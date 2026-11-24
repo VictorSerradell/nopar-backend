@@ -10,6 +10,7 @@ import com.company.nopar.exception.InvalidFileException;
 import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
+import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class InspectionService {
 
     private final VehicleInspectionRepository inspectionRepository;
     private final VehicleRepository vehicleRepository;
+    private final ShiftAssignmentRepository shiftRepository;
     private final FileStorageService fileStorageService;
 
     /**
@@ -48,6 +50,9 @@ public class InspectionService {
      *
      * Un vehículo en MAINTENANCE no admite partes (409): hasta que un administrador lo ponga de nuevo
      * en servicio no puede salir a la ruta.
+     *
+     * Si el conductor tiene turno ese día, el parte lo enlaza y anota si la furgoneta es la asignada. Es solo
+     * informativo: un parte de otra furgoneta, o de un conductor sin turno, se acepta igual.
      */
     @Transactional
     public VehicleInspection createInspection(
@@ -106,8 +111,21 @@ public class InspectionService {
         inspection.setAcceptedLiability(request.acceptedLiability());
         inspection.setAcceptedCleanliness(request.acceptedCleanliness());
         inspection.setStatus(initialStatus(request));
+        linkToShiftOfTheDay(inspection, driver, vehicle);
 
         return inspectionRepository.save(inspection);
+    }
+
+    /**
+     * Enlace informativo con el cuadrante: si el conductor tenía turno el día del parte, guarda cuál era y si la
+     * furgoneta del parte es la asignada en él. No bloquea nada; sin turno el parte queda sin enlace.
+     */
+    private void linkToShiftOfTheDay(VehicleInspection inspection, User driver, Vehicle vehicle) {
+        shiftRepository.findByWorkDateAndDriverId(inspection.getInspectionDate().toLocalDate(), driver.getId())
+                .ifPresent(shift -> {
+                    inspection.setShiftId(shift.getId());
+                    inspection.setMatchesAssignedVehicle(shift.getVehicle().getId().equals(vehicle.getId()));
+                });
     }
 
     /**

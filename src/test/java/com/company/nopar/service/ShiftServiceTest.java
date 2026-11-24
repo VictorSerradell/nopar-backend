@@ -9,6 +9,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.Wave;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.InvalidRequestException;
+import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.ShiftAssignmentRepository;
@@ -232,6 +233,49 @@ class ShiftServiceTest {
                 .isInstanceOf(DuplicateResourceException.class);
     }
 
+    @Test
+    void givenVehicleInMaintenance_whenCreateShift_thenInvalidStateAndNothingSaved() {
+        stubWaveAndDriver();
+        when(vehicleRepository.findById(3L))
+                .thenReturn(Optional.of(van(3L, "1111AAA", Vehicle.VehicleStatus.MAINTENANCE)));
+
+        assertThatThrownBy(() -> shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("1111AAA")
+                .hasMessageContaining("mantenimiento");
+
+        // ni siquiera se consulta si el conductor o la furgoneta están libres: el estado se comprueba antes
+        verify(shiftRepository, never()).existsByWorkDateAndDriverId(any(), any());
+        verify(shiftRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void givenDamagedVehicle_whenCreateShift_thenInvalidStateAndNothingSaved() {
+        stubWaveAndDriver();
+        when(vehicleRepository.findById(3L))
+                .thenReturn(Optional.of(van(3L, "1111AAA", Vehicle.VehicleStatus.DAMAGED)));
+
+        assertThatThrownBy(() -> shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("1111AAA")
+                .hasMessageContaining("dañado");
+
+        verify(shiftRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void givenVehicleInUse_whenCreateShift_thenItCanBeAssigned() {
+        // IN_USE solo significa que hoy ya hizo el parte: el turno puede ser de otro día y de noche se libera
+        stubWaveAndDriver();
+        when(vehicleRepository.findById(3L))
+                .thenReturn(Optional.of(van(3L, "1111AAA", Vehicle.VehicleStatus.IN_USE)));
+        when(shiftRepository.saveAndFlush(any(ShiftAssignment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ShiftAssignment shift = shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null);
+
+        assertThat(shift.getVehicle().getId()).isEqualTo(3L);
+    }
+
     // ---------------------------------------------------------------- modificación de turnos
 
     @Test
@@ -326,6 +370,55 @@ class ShiftServiceTest {
                 .hasMessageContaining("Ola");
     }
 
+    @Test
+    void givenVehicleInMaintenance_whenUpdateShiftToIt_thenInvalidStateAndTheShiftIsNotModified() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(vehicleRepository.findById(9L))
+                .thenReturn(Optional.of(van(9L, "2222BBB", Vehicle.VehicleStatus.MAINTENANCE)));
+
+        assertThatThrownBy(() -> shiftService.updateShift(4L, new ShiftUpdateRequest(null, null, null, 9L)))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("2222BBB")
+                .hasMessageContaining("mantenimiento");
+
+        assertThat(shift.getVehicle().getId()).isEqualTo(3L);
+        verify(shiftRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void givenDamagedVehicle_whenUpdateShiftToIt_thenInvalidState() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(vehicleRepository.findById(9L))
+                .thenReturn(Optional.of(van(9L, "2222BBB", Vehicle.VehicleStatus.DAMAGED)));
+
+        assertThatThrownBy(() -> shiftService.updateShift(4L, new ShiftUpdateRequest(null, null, null, 9L)))
+                .isInstanceOf(InvalidStateException.class)
+                .hasMessageContaining("dañado");
+
+        verify(shiftRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void givenTheCurrentVehicleNowInMaintenance_whenUpdateShiftWithoutChangingIt_thenItIsStillEditable() {
+        // el turno ya tenía esa furgoneta cuando se asignó; que luego pase a mantenimiento no bloquea cambiar la ola
+        ShiftAssignment shift = existingShift(4L);
+        shift.setVehicle(van(3L, "1111AAA", Vehicle.VehicleStatus.MAINTENANCE));
+        Wave otherWave = wave(8L, "Ola 2", LocalTime.of(11, 0));
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(waveRepository.findById(8L)).thenReturn(Optional.of(otherWave));
+        when(vehicleRepository.findById(3L))
+                .thenReturn(Optional.of(van(3L, "1111AAA", Vehicle.VehicleStatus.MAINTENANCE)));
+        when(shiftRepository.saveAndFlush(shift)).thenReturn(shift);
+
+        // se manda otra vez la misma furgoneta junto con la ola nueva: no cuenta como "cambiar de furgoneta"
+        ShiftAssignment updated = shiftService.updateShift(4L, new ShiftUpdateRequest(null, 8L, null, 3L));
+
+        assertThat(updated.getWave()).isSameAs(otherWave);
+        assertThat(updated.getVehicle().getId()).isEqualTo(3L);
+    }
+
     // ---------------------------------------------------------------- baja de turnos
 
     @Test
@@ -408,6 +501,11 @@ class ShiftServiceTest {
 
     // ---------------------------------------------------------------- datos de prueba
 
+    private void stubWaveAndDriver() {
+        when(waveRepository.findById(1L)).thenReturn(Optional.of(wave(1L, "Ola 1", LocalTime.of(9, 30))));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "driver1", User.Role.DRIVER)));
+    }
+
     private void stubWaveDriverAndVan() {
         when(waveRepository.findById(1L)).thenReturn(Optional.of(wave(1L, "Ola 1", LocalTime.of(9, 30))));
         when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "driver1", User.Role.DRIVER)));
@@ -442,9 +540,14 @@ class ShiftServiceTest {
     }
 
     private static Vehicle van(Long id, String licensePlate) {
+        return van(id, licensePlate, Vehicle.VehicleStatus.AVAILABLE);
+    }
+
+    private static Vehicle van(Long id, String licensePlate, Vehicle.VehicleStatus status) {
         Vehicle vehicle = new Vehicle();
         vehicle.setId(id);
         vehicle.setLicensePlate(licensePlate);
+        vehicle.setStatus(status);
         return vehicle;
     }
 }

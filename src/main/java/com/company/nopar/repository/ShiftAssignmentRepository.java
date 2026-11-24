@@ -49,6 +49,9 @@ public interface ShiftAssignmentRepository extends JpaRepository<ShiftAssignment
             """)
     Optional<ShiftAssignment> findWithDetailsById(@Param("id") Long id);
 
+    /** El turno de un conductor un día (a lo sumo uno: lo garantiza la restricción única). Sin traer sus relaciones. */
+    Optional<ShiftAssignment> findByWorkDateAndDriverId(LocalDate workDate, Long driverId);
+
     boolean existsByWorkDateAndDriverId(LocalDate workDate, Long driverId);
 
     boolean existsByWorkDateAndVehicleId(LocalDate workDate, Long vehicleId);

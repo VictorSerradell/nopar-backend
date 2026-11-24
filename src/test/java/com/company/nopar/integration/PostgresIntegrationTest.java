@@ -220,12 +220,13 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
                 "idx_vehicle_inspections_status_date",
                 "idx_vehicle_inspections_date",
+                "idx_vehicle_inspections_shift",
                 "idx_refresh_tokens_user",
                 "idx_vehicle_returns_vehicle_date",
                 "idx_shift_assignments_driver_date",
@@ -604,6 +605,9 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath(photoPath + "['image/png']").exists())
                 // el parte expone las URLs de las fotos y los listados son páginas de partes
                 .andExpect(jsonPath("$.components.schemas.InspectionResponse.properties.odometerPhotoUrl").exists())
+                // enlace informativo con el turno del día
+                .andExpect(jsonPath("$.components.schemas.InspectionResponse.properties.shiftId").exists())
+                .andExpect(jsonPath("$.components.schemas.InspectionResponse.properties.assignedVehicleMatches").exists())
                 .andExpect(jsonPath("$.components.schemas.PageResponseInspectionResponse.properties.content.items").exists())
                 // cuadrantes: el rango de fechas es obligatorio y la respuesta describe la ola, el conductor y la furgoneta
                 .andExpect(jsonPath("$.paths['/api/v1/shifts'].get.parameters[?(@.name == 'from')]").isNotEmpty())
@@ -915,6 +919,108 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void aReportIsLinkedToTheShiftOfTheDayWithoutEverBeingBlockedByIt() {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User carlos = saveUser("carlos", User.Role.DRIVER);
+        Vehicle van1 = saveVehicle("1111AAA", 1000);
+        Vehicle van2 = saveVehicle("2222BBB", 2000);
+        Vehicle van3 = saveVehicle("3333CCC", 3000);
+        Vehicle van4 = saveVehicle("4444DDD", 4000);
+        Wave wave = saveWave("Ola 1", LocalTime.of(9, 30));
+        LocalDate today = LocalDate.now();
+        ShiftAssignment anaShift = shiftService.createShift(
+                new ShiftCreateRequest(today, wave.getId(), ana.getId(), van1.getId()), admin);
+        ShiftAssignment beaShift = shiftService.createShift(
+                new ShiftCreateRequest(today, wave.getId(), bea.getId(), van2.getId()), admin);
+        // el turno de carlos es mañana: hoy no tiene
+        shiftService.createShift(new ShiftCreateRequest(today.plusDays(1), wave.getId(), carlos.getId(), van4.getId()), admin);
+
+        VehicleInspection asAssigned = report(van1, ana, 1500, null);
+        VehicleInspection otherVan = report(van3, bea, 3500, null);
+        VehicleInspection withoutShift = report(van4, carlos, 4500, null);
+
+        // se lee de la base de datos: las columnas nuevas se guardan y Hibernate las acepta
+        InspectionResponse asAssignedResponse = savedResponse(asAssigned);
+        assertThat(asAssignedResponse.shiftId()).isEqualTo(anaShift.getId());
+        assertThat(asAssignedResponse.assignedVehicleMatches()).isTrue();
+
+        // otra furgoneta distinta de la asignada: el parte se acepta y la discrepancia queda anotada
+        InspectionResponse otherVanResponse = savedResponse(otherVan);
+        assertThat(otherVanResponse.shiftId()).isEqualTo(beaShift.getId());
+        assertThat(otherVanResponse.assignedVehicleMatches()).isFalse();
+        assertThat(otherVanResponse.status()).isEqualTo(VehicleInspection.InspectionStatus.APPROVED);
+
+        InspectionResponse withoutShiftResponse = savedResponse(withoutShift);
+        assertThat(withoutShiftResponse.shiftId()).isNull();
+        assertThat(withoutShiftResponse.assignedVehicleMatches()).isNull();
+        assertThat(withoutShiftResponse.status()).isEqualTo(VehicleInspection.InspectionStatus.APPROVED);
+
+        // borrar el turno no falla por el enlace: el parte se conserva y pierde el enlace
+        shiftService.deleteShift(anaShift.getId());
+        InspectionResponse afterDelete = savedResponse(asAssigned);
+        assertThat(afterDelete.id()).isEqualTo(asAssigned.getId());
+        assertThat(afterDelete.shiftId()).isNull();
+        assertThat(afterDelete.assignedVehicleMatches()).isNull();
+    }
+
+    @Test
+    void aVehicleInMaintenanceOrDamagedCannotBeAssignedToAShiftOverHttp() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User driver = saveUser("driver1", User.Role.DRIVER);
+        Wave wave = saveWave("Ola 1", LocalTime.of(9, 30));
+        Vehicle inService = saveVehicle("1111AAA", 1000);
+        Vehicle inMaintenance = saveVehicle("2222BBB", 2000);
+        Vehicle damaged = saveVehicle("3333CCC", 3000);
+        vehicleService.changeVehicleStatus(inMaintenance.getId(), Vehicle.VehicleStatus.MAINTENANCE);
+        vehicleService.changeVehicleStatus(damaged.getId(), Vehicle.VehicleStatus.DAMAGED);
+        MediaType json = MediaType.APPLICATION_JSON;
+        String day = "2026-11-19";
+
+        // Al crear: 409 con el motivo, y no se guarda nada
+        mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, wave.getId(), driver, inMaintenance)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Estado no válido"))
+                .andExpect(jsonPath("$.detail", startsWith("El vehículo 2222BBB está en mantenimiento")));
+        mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, wave.getId(), driver, damaged)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail", startsWith("El vehículo 3333CCC está dañado")));
+        assertThat(shiftAssignmentRepository.count()).isZero();
+
+        // Al modificar: tampoco se puede cambiar a una furgoneta fuera de servicio, y el turno queda como estaba
+        long shiftId = idOf(mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody(day, wave.getId(), driver, inService)))
+                .andExpect(status().isCreated()));
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)).contentType(json)
+                        .content("{\"vehicleId\": %d}".formatted(inMaintenance.getId())))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Estado no válido"));
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)).contentType(json)
+                        .content("{\"vehicleId\": %d}".formatted(damaged.getId())))
+                .andExpect(status().isConflict());
+        assertThat(shiftAssignmentRepository.findWithDetailsById(shiftId).orElseThrow().getVehicle().getId())
+                .isEqualTo(inService.getId());
+
+        // Si la furgoneta de un turno pasa a mantenimiento después, el turno se sigue pudiendo editar sin cambiarla
+        vehicleService.changeVehicleStatus(inService.getId(), Vehicle.VehicleStatus.MAINTENANCE);
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)).contentType(json)
+                        .content("{\"workDate\": \"2026-11-20\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.workDate").value("2026-11-20"))
+                .andExpect(jsonPath("$.vehicleLicensePlate").value("1111AAA"));
+
+        // En cuanto un administrador la pone de nuevo en servicio, ya se puede asignar
+        vehicleService.changeVehicleStatus(inMaintenance.getId(), Vehicle.VehicleStatus.AVAILABLE);
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)).contentType(json)
+                        .content("{\"vehicleId\": %d}".formatted(inMaintenance.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.vehicleLicensePlate").value("2222BBB"));
+    }
+
+    @Test
     void theScheduleIsListedInOneStatementInReadingOrderAndTheDatabaseRejectsDoubleBookings() {
         User admin = saveUser("admin1", User.Role.ADMIN);
         User ana = saveUser("ana", User.Role.DRIVER);
@@ -1177,6 +1283,11 @@ class PostgresIntegrationTest {
         InspectionCreateRequest request = new InspectionCreateRequest(
                 vehicle.getId(), kilometers, true, true, true, damages, true, true, true);
         return inspectionService.createInspection(request, odometerPhoto(), null, null, driver);
+    }
+
+    /** El parte tal como queda en la base de datos, con los datos que necesita la respuesta. */
+    private InspectionResponse savedResponse(VehicleInspection inspection) {
+        return InspectionResponse.from(inspectionRepository.findWithDetailsById(inspection.getId()).orElseThrow());
     }
 
     private Wave saveWave(String name, LocalTime startTime) {

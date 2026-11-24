@@ -9,6 +9,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.Wave;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.InvalidRequestException;
+import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.ShiftAssignmentRepository;
@@ -26,7 +27,8 @@ import java.util.List;
 
 /**
  * Cuadrantes: las olas (franjas de salida) y qué conductor sale en cada una, con qué furgoneta, cada día.
- * Un conductor y una furgoneta solo pueden estar en un turno al día.
+ * Un conductor y una furgoneta solo pueden estar en un turno al día, y una furgoneta en mantenimiento o dañada
+ * no se puede asignar a ningún turno (409).
  */
 @Service
 @RequiredArgsConstructor
@@ -85,6 +87,7 @@ public class ShiftService {
         Wave wave = findWave(request.waveId());
         User driver = findDriver(request.driverId());
         Vehicle vehicle = findVehicle(request.vehicleId());
+        ensureAssignable(vehicle);
         ensureFree(request.workDate(), driver.getId(), vehicle.getId(), null);
 
         ShiftAssignment shift = new ShiftAssignment();
@@ -96,7 +99,12 @@ public class ShiftService {
         return saveOrConflict(shift);
     }
 
-    /** Solo cambia los campos enviados. El resultado también tiene que respetar un turno por conductor y furgoneta al día. */
+    /**
+     * Solo cambia los campos enviados. El resultado también tiene que respetar un turno por conductor y furgoneta al día.
+     *
+     * El estado de la furgoneta solo se comprueba si se cambia de furgoneta: un turno que ya tenía una furgoneta
+     * que después pasó a mantenimiento se puede seguir editando (otra ola, otro día) mientras no se vuelva a elegirla.
+     */
     @Transactional
     public ShiftAssignment updateShift(Long id, ShiftUpdateRequest request) {
         if (request.isEmpty()) {
@@ -112,6 +120,9 @@ public class ShiftService {
         Wave wave = request.waveId() != null ? findWave(request.waveId()) : shift.getWave();
         User driver = request.driverId() != null ? findDriver(request.driverId()) : shift.getDriver();
         Vehicle vehicle = request.vehicleId() != null ? findVehicle(request.vehicleId()) : shift.getVehicle();
+        if (!vehicle.getId().equals(shift.getVehicle().getId())) {
+            ensureAssignable(vehicle);
+        }
         ensureFree(workDate, driver.getId(), vehicle.getId(), id);
 
         shift.setWorkDate(workDate);
@@ -163,6 +174,19 @@ public class ShiftService {
             throw new InvalidRequestException("El usuario " + driver.getUsername() + " no es un conductor");
         }
         return driver;
+    }
+
+    /** Una furgoneta en mantenimiento o dañada no sale a la ruta: hasta que un administrador la ponga en servicio no se le asignan turnos. */
+    private void ensureAssignable(Vehicle vehicle) {
+        String reason = switch (vehicle.getStatus()) {
+            case MAINTENANCE -> "está en mantenimiento";
+            case DAMAGED -> "está dañado";
+            case AVAILABLE, IN_USE -> null;
+        };
+        if (reason != null) {
+            throw new InvalidStateException("El vehículo " + vehicle.getLicensePlate() + " " + reason
+                    + " y no se puede asignar a un turno hasta que un administrador cambie su estado");
+        }
     }
 
     /** ignoredShiftId: al editar un turno, él mismo no cuenta como conflicto. */

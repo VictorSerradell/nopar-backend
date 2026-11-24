@@ -31,10 +31,10 @@ public class AdminShiftController {
     private final ShiftService shiftService;
 
     @Operation(summary = "Asigna un turno",
-            description = "Conductor y furgoneta de una ola en un día. El usuario tiene que ser DRIVER, y ni él ni la furgoneta pueden tener otro turno ese día.")
+            description = "Conductor y furgoneta de una ola en un día. El usuario tiene que ser DRIVER, ni él ni la furgoneta pueden tener otro turno ese día, y la furgoneta no puede estar en MAINTENANCE ni DAMAGED.")
     @ApiResponse(responseCode = "400", description = "Datos no válidos, o el usuario no es un conductor")
     @ApiResponse(responseCode = "404", description = "La ola, el conductor o el vehículo no existen")
-    @ApiResponse(responseCode = "409", description = "El conductor o la furgoneta ya tienen un turno ese día")
+    @ApiResponse(responseCode = "409", description = "El conductor o la furgoneta ya tienen un turno ese día, o la furgoneta está en mantenimiento o dañada")
     @PostMapping
     public ResponseEntity<ShiftResponse> createShift(
             @Valid @RequestBody ShiftCreateRequest request,
@@ -45,10 +45,10 @@ public class AdminShiftController {
     }
 
     @Operation(summary = "Modifica un turno",
-            description = "Solo cambian los campos enviados. Hay que enviar al menos uno.")
+            description = "Solo cambian los campos enviados. Hay que enviar al menos uno. Si se cambia de furgoneta, la nueva no puede estar en MAINTENANCE ni DAMAGED.")
     @ApiResponse(responseCode = "400", description = "No se envió ningún cambio, o el usuario no es un conductor")
     @ApiResponse(responseCode = "404", description = "El turno, la ola, el conductor o el vehículo no existen")
-    @ApiResponse(responseCode = "409", description = "El conductor o la furgoneta ya tienen un turno ese día")
+    @ApiResponse(responseCode = "409", description = "El conductor o la furgoneta ya tienen un turno ese día, o la nueva furgoneta está en mantenimiento o dañada")
     @PatchMapping("/{id}")
     public ResponseEntity<ShiftResponse> updateShift(
             @PathVariable Long id,

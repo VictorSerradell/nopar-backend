@@ -8,6 +8,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.Wave;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.InvalidRequestException;
+import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.ShiftService;
@@ -128,6 +129,17 @@ class AdminShiftControllerTest {
     }
 
     @Test
+    void givenVehicleOutOfService_whenCreateShift_thenConflictWithTheReason() throws Exception {
+        when(shiftService.createShift(any(), any())).thenThrow(new InvalidStateException(
+                "El vehículo 1111AAA está en mantenimiento y no se puede asignar a un turno hasta que un administrador cambie su estado"));
+
+        mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Estado no válido"))
+                .andExpect(jsonPath("$.detail").value(startsWith("El vehículo 1111AAA está en mantenimiento")));
+    }
+
+    @Test
     void givenSomeFields_whenUpdateShift_thenTheServiceReceivesOnlyThose() throws Exception {
         when(shiftService.updateShift(eq(4L), any())).thenReturn(shift(4L));
 
@@ -159,6 +171,19 @@ class AdminShiftControllerTest {
                         {"workDate": "2026-11-20"}
                         """))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void givenVehicleOutOfService_whenUpdateShift_thenConflictWithTheReason() throws Exception {
+        when(shiftService.updateShift(eq(4L), any())).thenThrow(new InvalidStateException(
+                "El vehículo 2222BBB está dañado y no se puede asignar a un turno hasta que un administrador cambie su estado"));
+
+        mockMvc.perform(patch(URL + "/4").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"vehicleId": 9}
+                        """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Estado no válido"))
+                .andExpect(jsonPath("$.detail").value(startsWith("El vehículo 2222BBB está dañado")));
     }
 
     @Test

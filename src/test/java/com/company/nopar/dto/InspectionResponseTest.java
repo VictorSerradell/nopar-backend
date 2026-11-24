@@ -107,6 +107,31 @@ class InspectionResponseTest {
     }
 
     @Test
+    void givenInspectionLinkedToAShift_whenFrom_thenExposesTheShiftAndWhetherTheVanMatches() {
+        VehicleInspection inspection = fullInspection();
+        inspection.setShiftId(40L);
+        inspection.setMatchesAssignedVehicle(false);
+
+        InspectionResponse response = InspectionResponse.from(inspection);
+
+        assertThat(response.shiftId()).isEqualTo(40L);
+        assertThat(response.assignedVehicleMatches()).isFalse();
+    }
+
+    @Test
+    void givenInspectionWithoutShift_whenFrom_thenNoLinkAndTheLeftoverFlagIsHidden() {
+        // al borrar un turno la base de datos pone shift_id a null pero deja la marca: sin turno no se muestra
+        VehicleInspection inspection = fullInspection();
+        inspection.setShiftId(null);
+        inspection.setMatchesAssignedVehicle(true);
+
+        InspectionResponse response = InspectionResponse.from(inspection);
+
+        assertThat(response.shiftId()).isNull();
+        assertThat(response.assignedVehicleMatches()).isNull();
+    }
+
+    @Test
     void response_doesNotDeclareEntitiesNorSensitiveComponents() {
         List<String> components = Arrays.stream(InspectionResponse.class.getRecordComponents())
                 .map(RecordComponent::getName)

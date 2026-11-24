@@ -13,6 +13,10 @@ import java.util.List;
  * Las fotos se descargan aparte: cada campo *PhotoUrl es la ruta relativa de la API
  * ({@code /api/v1/inspections/{id}/photos/odometer|beacon|exterior}) o null si el parte no tiene esa foto.
  * Hay que pedirla con la cabecera Authorization, como cualquier otro endpoint.
+ *
+ * Enlace informativo con el cuadrante: {@code shiftId} es el turno que el conductor tenía ese día al hacer el parte
+ * y {@code assignedVehicleMatches} indica si la furgoneta del parte era la asignada en él. Ambos son null si no
+ * tenía turno (o si el turno se borró después). Nunca bloquean el parte.
  */
 public record InspectionResponse(
         Long id,
@@ -32,6 +36,8 @@ public record InspectionResponse(
         VehicleInspection.InspectionStatus status,
         String reviewedByUsername,
         LocalDateTime reviewedAt,
+        Long shiftId,
+        Boolean assignedVehicleMatches,
         String odometerPhotoUrl,
         String beaconPhotoUrl,
         String exteriorPhotoUrl
@@ -59,6 +65,9 @@ public record InspectionResponse(
                 inspection.getStatus(),
                 reviewer != null ? reviewer.getUsername() : null,
                 inspection.getReviewedAt(),
+                inspection.getShiftId(),
+                // sin turno (o con el turno ya borrado) no hay con qué comparar: no se muestra el dato suelto
+                inspection.getShiftId() != null ? inspection.getMatchesAssignedVehicle() : null,
                 photoUrl(inspection, InspectionPhotoType.ODOMETER),
                 photoUrl(inspection, InspectionPhotoType.BEACON),
                 photoUrl(inspection, InspectionPhotoType.EXTERIOR)

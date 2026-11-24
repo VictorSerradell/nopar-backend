@@ -3,6 +3,7 @@ package com.company.nopar.service;
 import com.company.nopar.dto.InspectionCreateRequest;
 import com.company.nopar.dto.InspectionReviewRequest.Decision;
 import com.company.nopar.entity.InspectionPhotoType;
+import com.company.nopar.entity.ShiftAssignment;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
@@ -11,6 +12,7 @@ import com.company.nopar.exception.InvalidFileException;
 import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceNotFoundException;
+import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +33,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -51,6 +54,9 @@ class InspectionServiceTest {
 
     @Mock
     private VehicleRepository vehicleRepository;
+
+    @Mock
+    private ShiftAssignmentRepository shiftRepository;
 
     @Mock
     private FileStorageService fileStorageService;
@@ -143,6 +149,54 @@ class InspectionServiceTest {
 
         finishTransaction(TransactionSynchronization.STATUS_COMMITTED);
         verify(fileStorageService, never()).delete(any());
+    }
+
+    // ------------------------------------------------------------ enlace informativo con el turno del día
+
+    @Test
+    void givenDriverWithShiftOfTheDayAndTheAssignedVan_whenCreateInspection_thenLinkedAndMatching() {
+        driver.setId(7L);
+        stubPersistableInspection();
+        when(shiftRepository.findByWorkDateAndDriverId(LocalDate.now(), 7L))
+                .thenReturn(Optional.of(shiftWithVan(40L, 5L)));
+
+        VehicleInspection result = inspectionService.createInspection(
+                request(5L, true, true, true, null), odometer, null, null, driver);
+
+        assertThat(result.getShiftId()).isEqualTo(40L);
+        assertThat(result.getMatchesAssignedVehicle()).isTrue();
+        assertThat(result.getStatus()).isEqualTo(InspectionStatus.APPROVED);
+    }
+
+    @Test
+    void givenDriverWithShiftOfTheDayAndAnotherVan_whenCreateInspection_thenLinkedNotMatchingAndNeverRejected() {
+        driver.setId(7L);
+        stubPersistableInspection();
+        when(shiftRepository.findByWorkDateAndDriverId(LocalDate.now(), 7L))
+                .thenReturn(Optional.of(shiftWithVan(40L, 9L)));
+
+        VehicleInspection result = inspectionService.createInspection(
+                request(5L, true, true, true, null), odometer, null, null, driver);
+
+        // el parte se acepta con normalidad: la discrepancia solo queda anotada para quien lo revise
+        assertThat(result.getShiftId()).isEqualTo(40L);
+        assertThat(result.getMatchesAssignedVehicle()).isFalse();
+        assertThat(result.getStatus()).isEqualTo(InspectionStatus.APPROVED);
+        verify(inspectionRepository).save(result);
+    }
+
+    @Test
+    void givenDriverWithoutShiftOfTheDay_whenCreateInspection_thenNoLinkAndNeverRejected() {
+        driver.setId(7L);
+        stubPersistableInspection();
+        when(shiftRepository.findByWorkDateAndDriverId(LocalDate.now(), 7L)).thenReturn(Optional.empty());
+
+        VehicleInspection result = inspectionService.createInspection(
+                request(5L, true, true, true, null), odometer, null, null, driver);
+
+        assertThat(result.getShiftId()).isNull();
+        assertThat(result.getMatchesAssignedVehicle()).isNull();
+        assertThat(result.getStatus()).isEqualTo(InspectionStatus.APPROVED);
     }
 
     @Test
@@ -436,6 +490,22 @@ class InspectionServiceTest {
             Long vehicleId, boolean tiresOk, boolean lightsOk, boolean beaconV16Present, String damagesReported) {
         return new InspectionCreateRequest(
                 vehicleId, 20000, tiresOk, lightsOk, beaconV16Present, damagesReported, true, true, true);
+    }
+
+    /** Lo mínimo para que createInspection llegue hasta el final con el vehículo 5 y la foto del cuentakilómetros. */
+    private void stubPersistableInspection() {
+        when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle()));
+        when(fileStorageService.storeFile(odometer)).thenReturn("odo.jpg");
+        when(inspectionRepository.save(any(VehicleInspection.class))).thenAnswer(call -> call.getArgument(0));
+    }
+
+    private static ShiftAssignment shiftWithVan(Long shiftId, Long vehicleId) {
+        Vehicle assigned = new Vehicle();
+        assigned.setId(vehicleId);
+        ShiftAssignment shift = new ShiftAssignment();
+        shift.setId(shiftId);
+        shift.setVehicle(assigned);
+        return shift;
     }
 
     private static VehicleInspection inspection(Long id, InspectionStatus status) {

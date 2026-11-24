@@ -63,6 +63,14 @@ public class VehicleInspection {
 
     private LocalDateTime reviewedAt;
 
+    // Enlace informativo con el cuadrante (V7): el turno que el conductor tenía ese día, si lo tenía, y si la
+    // furgoneta del parte era la asignada en él. Nunca bloquea el parte
+    @Column(name = "shift_id")
+    private Long shiftId;
+
+    @Column(name = "matches_assigned_vehicle")
+    private Boolean matchesAssignedVehicle;
+
     public enum InspectionStatus {
         SUBMITTED, APPROVED, REJECTED
     }
@@ -124,4 +132,10 @@ public class VehicleInspection {
 
     public LocalDateTime getReviewedAt() { return reviewedAt; }
     public void setReviewedAt(LocalDateTime reviewedAt) { this.reviewedAt = reviewedAt; }
+
+    public Long getShiftId() { return shiftId; }
+    public void setShiftId(Long shiftId) { this.shiftId = shiftId; }
+
+    public Boolean getMatchesAssignedVehicle() { return matchesAssignedVehicle; }
+    public void setMatchesAssignedVehicle(Boolean matchesAssignedVehicle) { this.matchesAssignedVehicle = matchesAssignedVehicle; }
 }
