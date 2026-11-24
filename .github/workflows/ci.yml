@@ -20,27 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # NoparApplicationTests arranca la aplicación contra un PostgreSQL en localhost:5432/fleet_db (como en local).
-    # Los tests de integración levantan el suyo con Testcontainers, para lo que el runner ya trae Docker.
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: fleet_db
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d fleet_db"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DB_PASSWORD: postgres
-      # Clave solo para el CI (Base64 de 37 bytes); la de verdad nunca va en el repositorio
-      JWT_SECRET: bm9wYXItY2ktb25seS1zaWduaW5nLWtleS0wMTIzNDU2Nzg5
-
+    # Los tests que necesitan base de datos (NoparApplicationTests y PostgresIntegrationTest) levantan su propio
+    # PostgreSQL con Testcontainers, para lo que el runner ya trae Docker: no hace falta un servicio Postgres ni
+    # variables como DB_PASSWORD o JWT_SECRET.
     steps:
       - uses: actions/checkout@v6
 
