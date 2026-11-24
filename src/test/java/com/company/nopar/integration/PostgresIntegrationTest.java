@@ -400,7 +400,7 @@ class PostgresIntegrationTest {
         InspectionCreateRequest rollback =
                 new InspectionCreateRequest(van.getId(), 4999, true, true, true, null, true, true, true);
 
-        assertThatThrownBy(() -> inspectionService.createInspection(rollback, odometerPhoto(), null, null, driver))
+        assertThatThrownBy(() -> inspectionService.createInspection(rollback, odometerPhoto(), null, exteriorPhoto(), driver))
                 .isInstanceOf(InvalidKilometersException.class);
 
         Vehicle after = vehicleRepository.findById(van.getId()).orElseThrow();
@@ -557,13 +557,14 @@ class PostgresIntegrationTest {
         User other = saveUser("other", User.Role.DRIVER);
         VehicleInspection report = report(saveVehicle("1111AAA", 1000), author, 1100, null);
         String odometerUrl = "/api/v1/inspections/" + report.getId() + "/photos/odometer";
+        String exteriorUrl = "/api/v1/inspections/" + report.getId() + "/photos/exterior";
 
-        // El listado trae la URL de la foto que existe (la misma que atiende el controlador) y nada para las demás
+        // El listado trae la URL de las fotos que existen (las mismas que atiende el controlador) y nada para la baliza
         mockMvc.perform(get("/api/v1/inspections/driver/me").with(user(author)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].odometerPhotoUrl").value(odometerUrl))
                 .andExpect(jsonPath("$.content[0].beaconPhotoUrl").doesNotExist())
-                .andExpect(jsonPath("$.content[0].exteriorPhotoUrl").doesNotExist());
+                .andExpect(jsonPath("$.content[0].exteriorPhotoUrl").value(exteriorUrl));
 
         // El conductor del parte y un administrador la descargan, con su tipo y con caché solo privada
         for (User allowed : List.of(author, admin)) {
@@ -1518,7 +1519,7 @@ class PostgresIntegrationTest {
     private VehicleInspection report(Vehicle vehicle, User driver, int kilometers, String damages) {
         InspectionCreateRequest request = new InspectionCreateRequest(
                 vehicle.getId(), kilometers, true, true, true, damages, true, true, true);
-        return inspectionService.createInspection(request, odometerPhoto(), null, null, driver);
+        return inspectionService.createInspection(request, odometerPhoto(), null, exteriorPhoto(), driver);
     }
 
     /** Espera (hasta 5 segundos) a que algo que ocurre en segundo plano se cumpla. */
@@ -1579,6 +1580,10 @@ class PostgresIntegrationTest {
 
     private static MockMultipartFile odometerPhoto() {
         return new MockMultipartFile("odometerPhoto", "odometer.jpg", "image/jpeg", JPEG);
+    }
+
+    private static MockMultipartFile exteriorPhoto() {
+        return new MockMultipartFile("exteriorPhoto", "exterior.jpg", "image/jpeg", JPEG);
     }
 
     private static List<InspectionResponse> responses(Page<VehicleInspection> page) {

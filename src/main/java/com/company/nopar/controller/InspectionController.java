@@ -41,7 +41,7 @@ public class InspectionController {
 
     /** Alta del parte de inspección: datos y checklist en la parte "data" (JSON) y las fotos como ficheros. */
     @Operation(summary = "Registra el parte matutino de un vehículo",
-            description = "Multipart: la parte `data` es un JSON (Content-Type application/json) con kilómetros, checklist y aceptaciones; `odometerPhoto` es obligatoria; `beaconPhoto` y `exteriorPhoto` son opcionales. Solo se aceptan imágenes JPEG o PNG (se comprueba el contenido, no el nombre). El conductor sale del token. Queda APPROVED si el checklist es correcto y no se reportan daños; en otro caso SUBMITTED, pendiente de que un administrador lo revise. Si el conductor tiene turno ese día, la respuesta trae `shiftId` y `assignedVehicleMatches` (si la furgoneta del parte es la asignada); es solo informativo y nunca rechaza el parte.")
+            description = "Multipart: la parte `data` es un JSON (Content-Type application/json) con kilómetros, checklist y aceptaciones; `odometerPhoto` y `exteriorPhoto` son obligatorias; `beaconPhoto` es opcional. Solo se aceptan imágenes JPEG o PNG (se comprueba el contenido, no el nombre). El conductor sale del token. Queda APPROVED si el checklist es correcto y no se reportan daños; en otro caso SUBMITTED, pendiente de que un administrador lo revise. Si el conductor tiene turno ese día, la respuesta trae `shiftId` y `assignedVehicleMatches` (si la furgoneta del parte es la asignada); es solo informativo y nunca rechaza el parte.")
     @ApiResponse(responseCode = "400", description = "Datos no válidos o archivo que no es JPEG/PNG")
     @ApiResponse(responseCode = "404", description = "El vehículo no existe")
     @ApiResponse(responseCode = "409", description = "Kilómetros menores que los registrados, o vehículo en MAINTENANCE")
@@ -51,7 +51,7 @@ public class InspectionController {
             @Valid @RequestPart("data") InspectionCreateRequest request,
             @RequestPart("odometerPhoto") MultipartFile odometerPhoto,
             @RequestPart(value = "beaconPhoto", required = false) MultipartFile beaconPhoto,
-            @RequestPart(value = "exteriorPhoto", required = false) MultipartFile exteriorPhoto,
+            @RequestPart("exteriorPhoto") MultipartFile exteriorPhoto,
             @AuthenticationPrincipal User currentUser // el conductor sale del token JWT, no lo envía el cliente
     ) {
         VehicleInspection savedInspection = inspectionService.createInspection(

@@ -75,9 +75,12 @@ public class InspectionService {
             throw InvalidKilometersException.lowerThanRegistered(request.kilometers(), vehicle.getCurrentKilometers());
         }
 
-        // 2. La foto del cuentakilómetros es obligatoria (un fichero vacío cuenta como no enviado)
+        // 2. Las fotos del cuentakilómetros y del exterior son obligatorias (un fichero vacío cuenta como no enviado)
         if (odometerPhoto == null || odometerPhoto.isEmpty()) {
             throw new InvalidFileException("La foto del cuentakilómetros es obligatoria");
+        }
+        if (exteriorPhoto == null || exteriorPhoto.isEmpty()) {
+            throw new InvalidFileException("La foto del exterior de la furgoneta es obligatoria");
         }
 
         // 3. Guardar los adjuntos. Si algo falla después, o la transacción se revierte, se borran del disco

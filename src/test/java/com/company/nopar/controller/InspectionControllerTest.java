@@ -71,7 +71,8 @@ class InspectionControllerTest {
 
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(VALID_DATA))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value(1))
                 .andExpect(jsonPath("$.vehicleLicensePlate").value("1234-ABC"))
@@ -92,7 +93,8 @@ class InspectionControllerTest {
 
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(VALID_DATA))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.title").value("Archivo no válido"))
                 .andExpect(jsonPath("$.detail").value("Formato de archivo no permitido. Solo se aceptan imágenes JPEG y PNG."));
@@ -105,7 +107,8 @@ class InspectionControllerTest {
 
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(VALID_DATA))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
     }
@@ -118,7 +121,8 @@ class InspectionControllerTest {
 
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(VALID_DATA))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.title").value("Kilómetros no válidos"))
                 .andExpect(jsonPath("$.detail").value(detail));
@@ -132,17 +136,29 @@ class InspectionControllerTest {
 
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(VALID_DATA))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.title").value("Estado no válido"))
                 .andExpect(jsonPath("$.detail").value(detail));
     }
 
     @Test
+    void givenNoExteriorPhoto_whenCreateInspection_thenBadRequestAndServiceNotCalled() throws Exception {
+        mockMvc.perform(multipart("/api/v1/inspections")
+                        .file(data(VALID_DATA))
+                        .file(odometerPhoto()))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(inspectionService);
+    }
+
+    @Test
     void givenLiabilityNotAccepted_whenCreateInspection_thenBadRequestWithFieldErrors() throws Exception {
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(DATA_WITHOUT_LIABILITY))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.title").value("Datos no válidos"))
                 .andExpect(jsonPath("$.errors.acceptedLiability").exists());
@@ -154,7 +170,8 @@ class InspectionControllerTest {
     void givenMissingChecklist_whenCreateInspection_thenBadRequestWithFieldErrors() throws Exception {
         mockMvc.perform(multipart("/api/v1/inspections")
                         .file(data(DATA_WITHOUT_CHECKLIST))
-                        .file(odometerPhoto()))
+                        .file(odometerPhoto())
+                        .file(exteriorPhoto()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.tiresOk").exists())
                 .andExpect(jsonPath("$.errors.lightsOk").exists())
@@ -204,6 +221,10 @@ class InspectionControllerTest {
 
     private static MockMultipartFile odometerPhoto() {
         return new MockMultipartFile("odometerPhoto", "odo.jpg", "image/jpeg", new byte[]{1, 2, 3});
+    }
+
+    private static MockMultipartFile exteriorPhoto() {
+        return new MockMultipartFile("exteriorPhoto", "ext.jpg", "image/jpeg", new byte[]{1, 2, 3});
     }
 
     private static VehicleInspection savedInspection() {

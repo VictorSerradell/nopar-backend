@@ -93,7 +93,7 @@ class InspectionServiceTest {
 
         // daños en blanco: cuenta como "sin daños"
         VehicleInspection result = inspectionService.createInspection(
-                request(5L, true, true, true, "   "), odometer, null, null, driver);
+                request(5L, true, true, true, "   "), odometer, null, exterior, driver);
 
         assertThat(result.getStatus()).isEqualTo(InspectionStatus.APPROVED);
         assertThat(result.getTiresOk()).isTrue();
@@ -110,7 +110,7 @@ class InspectionServiceTest {
         when(inspectionRepository.save(any(VehicleInspection.class))).thenAnswer(call -> call.getArgument(0));
 
         VehicleInspection result = inspectionService.createInspection(
-                request(5L, true, true, true, "Rayón en la puerta"), odometer, null, null, driver);
+                request(5L, true, true, true, "Rayón en la puerta"), odometer, null, exterior, driver);
 
         assertThat(result.getStatus()).isEqualTo(InspectionStatus.SUBMITTED);
         assertThat(result.getDamagesReported()).isEqualTo("Rayón en la puerta");
@@ -123,7 +123,7 @@ class InspectionServiceTest {
         when(inspectionRepository.save(any(VehicleInspection.class))).thenAnswer(call -> call.getArgument(0));
 
         VehicleInspection result = inspectionService.createInspection(
-                request(5L, true, false, true, null), odometer, null, null, driver);
+                request(5L, true, false, true, null), odometer, null, exterior, driver);
 
         assertThat(result.getStatus()).isEqualTo(InspectionStatus.SUBMITTED);
         assertThat(result.getLightsOk()).isFalse();
@@ -161,7 +161,7 @@ class InspectionServiceTest {
                 .thenReturn(Optional.of(shiftWithVan(40L, 5L)));
 
         VehicleInspection result = inspectionService.createInspection(
-                request(5L, true, true, true, null), odometer, null, null, driver);
+                request(5L, true, true, true, null), odometer, null, exterior, driver);
 
         assertThat(result.getShiftId()).isEqualTo(40L);
         assertThat(result.getMatchesAssignedVehicle()).isTrue();
@@ -176,7 +176,7 @@ class InspectionServiceTest {
                 .thenReturn(Optional.of(shiftWithVan(40L, 9L)));
 
         VehicleInspection result = inspectionService.createInspection(
-                request(5L, true, true, true, null), odometer, null, null, driver);
+                request(5L, true, true, true, null), odometer, null, exterior, driver);
 
         // el parte se acepta con normalidad: la discrepancia solo queda anotada para quien lo revise
         assertThat(result.getShiftId()).isEqualTo(40L);
@@ -192,7 +192,7 @@ class InspectionServiceTest {
         when(shiftRepository.findByWorkDateAndDriverId(LocalDate.now(), 7L)).thenReturn(Optional.empty());
 
         VehicleInspection result = inspectionService.createInspection(
-                request(5L, true, true, true, null), odometer, null, null, driver);
+                request(5L, true, true, true, null), odometer, null, exterior, driver);
 
         assertThat(result.getShiftId()).isNull();
         assertThat(result.getMatchesAssignedVehicle()).isNull();
@@ -205,7 +205,7 @@ class InspectionServiceTest {
         InspectionCreateRequest rollback =
                 new InspectionCreateRequest(5L, 14999, true, true, true, null, true, true, true);
 
-        assertThatThrownBy(() -> inspectionService.createInspection(rollback, odometer, null, null, driver))
+        assertThatThrownBy(() -> inspectionService.createInspection(rollback, odometer, null, exterior, driver))
                 .isInstanceOf(InvalidKilometersException.class)
                 .hasMessageContaining("14999")
                 .hasMessageContaining("15000");
@@ -223,7 +223,7 @@ class InspectionServiceTest {
         InspectionCreateRequest sameKilometers =
                 new InspectionCreateRequest(5L, 15000, true, true, true, null, true, true, true);
 
-        VehicleInspection result = inspectionService.createInspection(sameKilometers, odometer, null, null, driver);
+        VehicleInspection result = inspectionService.createInspection(sameKilometers, odometer, null, exterior, driver);
 
         assertThat(result.getKilometers()).isEqualTo(15000);
     }
@@ -236,7 +236,7 @@ class InspectionServiceTest {
         when(fileStorageService.storeFile(odometer)).thenReturn("odo.jpg");
         when(inspectionRepository.save(any(VehicleInspection.class))).thenAnswer(call -> call.getArgument(0));
 
-        inspectionService.createInspection(request(5L), odometer, null, null, driver);
+        inspectionService.createInspection(request(5L), odometer, null, exterior, driver);
 
         assertThat(vehicle.getStatus()).isEqualTo(Vehicle.VehicleStatus.DAMAGED);
         assertThat(vehicle.getCurrentKilometers()).isEqualTo(20000);
@@ -280,6 +280,31 @@ class InspectionServiceTest {
         assertThatThrownBy(() -> inspectionService.createInspection(request(5L), emptyOdometer, beacon, exterior, driver))
                 .isInstanceOf(InvalidFileException.class)
                 .hasMessageContaining("cuentakilómetros");
+
+        verifyNoInteractions(fileStorageService);
+        verify(inspectionRepository, never()).save(any());
+    }
+
+    @Test
+    void givenNoExteriorPhoto_whenCreateInspection_thenInvalidFileAndNothingStored() {
+        when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle()));
+
+        assertThatThrownBy(() -> inspectionService.createInspection(request(5L), odometer, beacon, null, driver))
+                .isInstanceOf(InvalidFileException.class)
+                .hasMessageContaining("exterior");
+
+        verifyNoInteractions(fileStorageService);
+        verify(inspectionRepository, never()).save(any());
+    }
+
+    @Test
+    void givenEmptyExteriorPhoto_whenCreateInspection_thenInvalidFileAndNothingStored() {
+        when(vehicleRepository.findById(5L)).thenReturn(Optional.of(vehicle()));
+        MockMultipartFile emptyExterior = new MockMultipartFile("exteriorPhoto", "ext.jpg", "image/jpeg", new byte[0]);
+
+        assertThatThrownBy(() -> inspectionService.createInspection(request(5L), odometer, beacon, emptyExterior, driver))
+                .isInstanceOf(InvalidFileException.class)
+                .hasMessageContaining("exterior");
 
         verifyNoInteractions(fileStorageService);
         verify(inspectionRepository, never()).save(any());
