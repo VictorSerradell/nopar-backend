@@ -95,4 +95,41 @@ class PushServiceTest {
         verify(deviceService).removeInvalidTokens(List.of("tok-2"));
         verify(deviceTokenRepository, never()).findTokensByUserRole(any());
     }
+
+    @Test
+    void givenNoUsers_whenNotifyUsers_thenNothingIsLookedUpOrSent() {
+        pushService.notifyUsers(List.of(), notification);
+
+        verifyNoInteractions(deviceTokenRepository, pushSender, deviceService);
+    }
+
+    @Test
+    void givenUsersDevices_whenNotifyUsers_thenSendsToAllOfThemInOneGo() {
+        when(deviceTokenRepository.findTokensByUserIdIn(List.of(2L, 3L))).thenReturn(List.of("tok-1", "tok-2"));
+        when(pushSender.send(notification, List.of("tok-1", "tok-2"))).thenReturn(List.of());
+
+        pushService.notifyUsers(List.of(2L, 3L), notification);
+
+        verify(pushSender).send(notification, List.of("tok-1", "tok-2"));
+        verifyNoInteractions(deviceService);
+    }
+
+    @Test
+    void givenUsersWithoutDevices_whenNotifyUsers_thenNothingIsSent() {
+        when(deviceTokenRepository.findTokensByUserIdIn(List.of(2L))).thenReturn(List.of());
+
+        pushService.notifyUsers(List.of(2L), notification);
+
+        verifyNoInteractions(pushSender, deviceService);
+    }
+
+    @Test
+    void givenUnregisteredDevices_whenNotifyUsers_thenTheirTokensAreRemoved() {
+        when(deviceTokenRepository.findTokensByUserIdIn(List.of(2L, 3L))).thenReturn(List.of("tok-1", "tok-2"));
+        when(pushSender.send(notification, List.of("tok-1", "tok-2"))).thenReturn(List.of("tok-1"));
+
+        pushService.notifyUsers(List.of(2L, 3L), notification);
+
+        verify(deviceService).removeInvalidTokens(List.of("tok-1"));
+    }
 }

@@ -71,6 +71,18 @@ class UserServiceTest {
     }
 
     @Test
+    void givenNewUsername_whenCreateManager_thenSavesAManagerWithEncodedPassword() {
+        when(passwordEncoder.encode("password-segura-123")).thenReturn("$2a$10$hash");
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        User created = userService.createManager("encargado1", "password-segura-123");
+
+        assertThat(created.getUsername()).isEqualTo("encargado1");
+        assertThat(created.getRole()).isEqualTo(User.Role.MANAGER);
+        assertThat(created.getPassword()).isEqualTo("$2a$10$hash");
+    }
+
+    @Test
     void givenExistingUsername_whenCreateDriver_thenDuplicateAndNothingSaved() {
         when(userRepository.existsByUsername("conductor1")).thenReturn(true);
 

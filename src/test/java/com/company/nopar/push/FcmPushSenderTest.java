@@ -111,6 +111,25 @@ class FcmPushSenderTest {
     }
 
     @Test
+    void givenAWaveCall_whenSend_thenTheMessageNamesTheWaveCallChannelAndKeepsHighPriority() throws Exception {
+        PushNotification waveCall = new PushNotification("Ola 1: Subid", "Abre la app",
+                Map.of("type", "wave_call", "waveCallId", "7"));
+
+        sender().send(waveCall, List.of("tok-1"));
+
+        assertThat(sendRequests.get(0).body())
+                .contains("\"priority\":\"HIGH\"")
+                .contains("\"channel_id\":\"nopar_wave_calls\"");
+    }
+
+    @Test
+    void givenAnAnnouncement_whenSend_thenTheMessageNamesNoChannel() throws Exception {
+        sender().send(notification, List.of("tok-1"));
+
+        assertThat(sendRequests.get(0).body()).doesNotContain("channel_id");
+    }
+
+    @Test
     void givenTwoSends_whenTheAccessTokenIsStillValid_thenItIsReused() throws Exception {
         FcmPushSender sender = sender();
 

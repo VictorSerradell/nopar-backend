@@ -64,6 +64,35 @@ class AdminUserControllerTest {
     }
 
     @Test
+    void givenValidRequest_whenCreateManager_thenCreatedWithTheManagerRole() throws Exception {
+        User created = new User();
+        created.setId(11L);
+        created.setUsername("conductor2");
+        created.setPassword("$2a$10$hash-que-no-debe-salir");
+        created.setRole(User.Role.MANAGER);
+        when(userService.createManager("conductor2", "password-segura-123")).thenReturn(created);
+
+        mockMvc.perform(post("/api/v1/admin/users/managers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(11))
+                .andExpect(jsonPath("$.role").value("MANAGER"))
+                .andExpect(jsonPath("$..password").isEmpty());
+    }
+
+    @Test
+    void givenShortUsernameAndPassword_whenCreateManager_thenBadRequestAndNothingCreated() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/users/managers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(INVALID_BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.username").exists());
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
     void givenShortUsernameAndPassword_whenCreateDriver_thenBadRequestWithFieldErrors() throws Exception {
         mockMvc.perform(post("/api/v1/admin/users")
                         .contentType(MediaType.APPLICATION_JSON)

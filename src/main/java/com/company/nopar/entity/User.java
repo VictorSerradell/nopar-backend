@@ -35,7 +35,11 @@ public class User implements UserDetails {
     private Role role;
 
     public enum Role {
-        DRIVER, ADMIN
+        /** Conductor. */
+        DRIVER,
+        /** Encargado: da la orden de subir a una ola (y confirma quién se ha enterado), sin ser administrador. */
+        MANAGER,
+        ADMIN
     }
 
     @Override

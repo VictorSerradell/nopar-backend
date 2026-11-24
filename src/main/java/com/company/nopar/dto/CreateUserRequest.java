@@ -4,7 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
-/** Alta de un conductor por parte de un administrador. El rol lo fija el servidor (DRIVER). */
+/** Alta de un conductor o de un encargado por parte de un administrador. El rol lo fija el servidor según el endpoint. */
 public record CreateUserRequest(
         @NotBlank(message = "El nombre de usuario es obligatorio")
         @Size(min = 3, max = 50, message = "El nombre de usuario debe tener entre 3 y 50 caracteres")

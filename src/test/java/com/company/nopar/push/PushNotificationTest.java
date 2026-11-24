@@ -1,10 +1,12 @@
 package com.company.nopar.push;
 
 import com.company.nopar.service.ShiftChangedEvent;
+import com.company.nopar.service.WaveCalledEvent;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,5 +105,32 @@ class PushNotificationTest {
         PushNotification notification = PushNotification.forShift(shiftEvent(ShiftChangedEvent.Change.ASSIGNED, null));
 
         assertThat(notification.data()).doesNotContainKey("shiftId").containsEntry("type", "shift");
+    }
+
+    @Test
+    void givenAWaveCall_whenForWaveCall_thenTheTitleSaysWaveAndOrderAndTheDataToOpenIt() {
+        WaveCalledEvent event = new WaveCalledEvent(
+                7L, 1L, "Ola 1", LocalDate.of(2026, 11, 24), "Subid", List.of(2L, 3L));
+
+        PushNotification notification = PushNotification.forWaveCall(event);
+
+        assertThat(notification.title()).isEqualTo("Ola 1: Subid");
+        assertThat(notification.body()).isEqualTo("Abre la app y pulsa «Enterado»");
+        assertThat(notification.data()).isEqualTo(
+                Map.of("type", "wave_call", "waveCallId", "7", "waveId", "1", "workDate", "2026-11-24"));
+    }
+
+    @Test
+    void givenAWaveCall_whenAndroidChannelId_thenItUsesTheWaveCallChannel() {
+        WaveCalledEvent event = new WaveCalledEvent(
+                7L, 1L, "Ola 1", LocalDate.of(2026, 11, 24), "Subid", List.of(2L));
+
+        assertThat(PushNotification.forWaveCall(event).androidChannelId()).isEqualTo("nopar_wave_calls");
+    }
+
+    @Test
+    void givenAnnouncementsAndShifts_whenAndroidChannelId_thenNoneSoAndroidUsesTheDefaultOne() {
+        assertThat(PushNotification.forAnnouncement(5L, "Lockers", "Texto").androidChannelId()).isNull();
+        assertThat(new PushNotification("Titulo", "Cuerpo", null).androidChannelId()).isNull();
     }
 }

@@ -147,7 +147,13 @@ public class FcmPushSender implements PushSender {
             message.put("data", notification.data());
         }
         // En Android, prioridad alta: el aviso llega aunque el móvil esté en reposo
-        message.put("android", Map.of("priority", "HIGH"));
+        Map<String, Object> android = new LinkedHashMap<>();
+        android.put("priority", "HIGH");
+        if (notification.androidChannelId() != null) {
+            // Con la app cerrada es el sistema quien pinta la notificación: este es el canal que usará
+            android.put("notification", Map.of("channel_id", notification.androidChannelId()));
+        }
+        message.put("android", android);
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("message", message);
         return envelope;

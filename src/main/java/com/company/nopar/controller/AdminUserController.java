@@ -36,6 +36,15 @@ public class AdminUserController {
         return ResponseEntity.status(HttpStatus.CREATED).body(UserResponse.from(created));
     }
 
+    @Operation(summary = "Crea un encargado",
+            description = "Un encargado puede dar la orden de subir a una ola (/api/v1/dispatch) y ver quién la ha confirmado, y nada más de la administración.")
+    @ApiResponse(responseCode = "409", description = "Ya existe un usuario con ese nombre")
+    @PostMapping("/managers")
+    public ResponseEntity<UserResponse> createManager(@Valid @RequestBody CreateUserRequest request) {
+        User created = userService.createManager(request.username(), request.password());
+        return ResponseEntity.status(HttpStatus.CREATED).body(UserResponse.from(created));
+    }
+
     @Operation(summary = "Restablece la contraseña de un conductor",
             description = "Para un conductor que ha olvidado la suya: no exige la contraseña actual y cierra todas sus sesiones (revoca sus refresh tokens y da de baja sus dispositivos push). Solo vale para conductores; los administradores cambian la suya con PATCH /api/v1/auth/password.")
     @ApiResponse(responseCode = "400", description = "El usuario no es un conductor o la nueva contraseña no es válida")

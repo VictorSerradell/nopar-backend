@@ -30,6 +30,12 @@ public class UserService {
         return createUser(username, rawPassword, User.Role.DRIVER);
     }
 
+    /** Un encargado: puede dar la orden de subir a una ola, pero no administra nada más. */
+    @Transactional
+    public User createManager(String username, String rawPassword) {
+        return createUser(username, rawPassword, User.Role.MANAGER);
+    }
+
     @Transactional
     public User createUser(String username, String rawPassword, User.Role role) {
         requireWithinBcryptLimit(rawPassword, "La contraseña");

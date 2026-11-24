@@ -6,6 +6,7 @@ import com.company.nopar.service.DeviceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -29,6 +30,14 @@ public class PushService {
     /** A todos los dispositivos de un usuario (algo que le concierne solo a él, como su turno). */
     public void notifyUser(Long userId, PushNotification notification) {
         send(notification, deviceTokenRepository.findTokensByUserId(userId));
+    }
+
+    /** A todos los dispositivos de varios usuarios (algo que concierne a un grupo concreto, como una ola). */
+    public void notifyUsers(Collection<Long> userIds, PushNotification notification) {
+        if (userIds.isEmpty()) {
+            return;
+        }
+        send(notification, deviceTokenRepository.findTokensByUserIdIn(userIds));
     }
 
     private void send(PushNotification notification, List<String> tokens) {

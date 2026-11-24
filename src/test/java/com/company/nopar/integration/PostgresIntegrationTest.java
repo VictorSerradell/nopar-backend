@@ -34,6 +34,7 @@ import com.company.nopar.repository.UserRepository;
 import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.VehicleReturnRepository;
+import com.company.nopar.repository.WaveCallRepository;
 import com.company.nopar.repository.WaveRepository;
 import com.company.nopar.service.AnnouncementService;
 import com.company.nopar.service.DeviceService;
@@ -94,6 +95,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.after;
@@ -113,7 +115,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V8) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V9) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -176,6 +178,8 @@ class PostgresIntegrationTest {
     @Autowired
     private WaveRepository waveRepository;
     @Autowired
+    private WaveCallRepository waveCallRepository;
+    @Autowired
     private AnnouncementService announcementService;
     @Autowired
     private AnnouncementRepository announcementRepository;
@@ -211,6 +215,8 @@ class PostgresIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
+        // Las llamadas de ola apuntan a olas y usuarios; sus destinatarios se borran con ellas (on delete cascade)
+        waveCallRepository.deleteAllInBatch();
         // Los turnos apuntan a olas, conductores y furgonetas: se borran antes que ellos
         shiftAssignmentRepository.deleteAllInBatch();
         waveRepository.deleteAllInBatch();
@@ -246,7 +252,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -260,13 +266,16 @@ class PostgresIntegrationTest {
                 "idx_shift_assignments_vehicle",
                 "idx_shift_assignments_wave",
                 "idx_announcements_board",
-                "idx_announcement_reads_user");
+                "idx_announcement_reads_user",
+                "idx_wave_calls_work_date",
+                "idx_wave_call_recipients_driver");
         assertThat(uniques).contains(
                 "uk_waves_name",
                 "uk_shift_assignments_driver_day",
                 "uk_shift_assignments_vehicle_day",
                 "uk_announcement_reads_announcement_user",
-                "uk_device_tokens_token");
+                "uk_device_tokens_token",
+                "uk_wave_call_recipients_call_driver");
     }
 
     // ------------------------------------------------------------------ listados paginados
@@ -662,6 +671,15 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/devices'].delete.parameters[?(@.name == 'token')]").isNotEmpty())
                 .andExpect(jsonPath("$.components.schemas.DeviceRegistrationRequest.properties.token").exists())
                 .andExpect(jsonPath("$.components.schemas.DeviceRegistrationRequest.properties.platform").exists())
+                // llamadas de ola: el encargado o el administrador llaman, el conductor confirma con "Enterado"
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/waves/{waveId}/calls'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/wave-calls'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/wave-calls/{id}'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/wave-calls/me'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/wave-calls/{id}/acknowledge'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/users/managers'].post").exists())
+                .andExpect(jsonPath("$.components.schemas.WaveCallResponse.properties.recipients").exists())
+                .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.acknowledged").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
                 .andExpect(jsonPath("$.components.schemas.User").doesNotExist())
                 .andExpect(jsonPath("$.paths..parameters[?(@.name in ['currentUser', 'currentAdmin'])]").isEmpty());
@@ -1134,6 +1152,127 @@ class PostgresIntegrationTest {
         verify(pushSender, after(500).never()).send(
                 argThat(notification -> Set.of("2026-11-26", "2026-11-27").contains(notification.data().get("workDate"))),
                 anyCollection());
+    }
+
+    @Test
+    void callingAWaveNotifiesOnlyItsDriversTodayAndTheyConfirmWithEnterado() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User manager = saveUser("encargado1", User.Role.MANAGER);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User cris = saveUser("cris", User.Role.DRIVER);
+        User dani = saveUser("dani", User.Role.DRIVER);
+        deviceService.registerDevice(ana, "tok-ana", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(bea, "tok-bea", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(cris, "tok-cris", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(dani, "tok-dani", DeviceToken.Platform.ANDROID);
+        Wave wave1 = saveWave("Ola 1", LocalTime.of(9, 30));
+        Wave wave2 = saveWave("Ola 2", LocalTime.of(10, 30));
+        Wave emptyWave = saveWave("Ola 3", LocalTime.of(11, 30));
+        Vehicle van1 = saveVehicle("1111AAA", 1000);
+        Vehicle van2 = saveVehicle("2222BBB", 2000);
+        Vehicle van3 = saveVehicle("3333CCC", 3000);
+        LocalDate today = LocalDate.now();
+        shiftAssignmentRepository.save(shift(today, wave1, ana, van1, admin));
+        shiftAssignmentRepository.save(shift(today, wave1, bea, van2, admin));
+        shiftAssignmentRepository.save(shift(today, wave2, cris, van3, admin));
+        // Dani sale en la misma ola, pero mañana: hoy no se le llama
+        shiftAssignmentRepository.save(shift(today.plusDays(1), wave1, dani, van1, admin));
+        MediaType json = MediaType.APPLICATION_JSON;
+        String callUrl = "/api/v1/dispatch/waves/{id}/calls";
+
+        // Un conductor no da la orden, y una ola sin nadie hoy no se puede llamar
+        mockMvc.perform(post(callUrl, wave1.getId()).with(user(ana)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(callUrl, emptyWave.getId()).with(user(manager)))
+                .andExpect(status().isConflict());
+
+        // El encargado llama a la Ola 1 sin texto: "Subid"
+        ResultActions created = mockMvc.perform(post(callUrl, wave1.getId()).with(user(manager)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.waveName").value("Ola 1"))
+                .andExpect(jsonPath("$.message").value("Subid"))
+                .andExpect(jsonPath("$.calledByUsername").value("encargado1"))
+                .andExpect(jsonPath("$.recipientCount").value(2))
+                .andExpect(jsonPath("$.acknowledgedCount").value(0))
+                .andExpect(jsonPath("$.recipients[0].driverUsername").value("ana"))
+                .andExpect(jsonPath("$.recipients[0].vehicleLicensePlate").value("1111AAA"))
+                .andExpect(jsonPath("$.recipients[1].driverUsername").value("bea"))
+                .andExpect(jsonPath("$.recipients[1].vehicleLicensePlate").value("2222BBB"));
+        long callId = idOf(created);
+
+        // Se avisa en segundo plano solo a los dispositivos de Ana y Bea (ni Cris, de otra ola, ni Dani, de otro dia)
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Ola 1: Subid".equals(notification.title())
+                        && notification.data().equals(Map.of("type", "wave_call", "waveCallId", String.valueOf(callId),
+                                "waveId", String.valueOf(wave1.getId()), "workDate", today.toString()))),
+                argThat(tokens -> new HashSet<>(tokens).equals(Set.of("tok-ana", "tok-bea"))));
+        verify(pushSender, after(500).never()).send(
+                any(), argThat(tokens -> tokens.contains("tok-cris") || tokens.contains("tok-dani")));
+
+        // Ana ve su llamada pendiente, con su furgoneta; Cris no tiene ninguna
+        mockMvc.perform(get("/api/v1/wave-calls/me").with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(callId))
+                .andExpect(jsonPath("$[0].vehicleLicensePlate").value("1111AAA"))
+                .andExpect(jsonPath("$[0].acknowledged").value(false));
+        mockMvc.perform(get("/api/v1/wave-calls/me").with(user(cris)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        // Cris no era destinataria: no puede confirmar. Ana si, y confirmar otra vez no cambia la hora
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(cris)))
+                .andExpect(status().isForbidden());
+        String firstAck = field(mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.acknowledged").value(true)), "acknowledgedAt");
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.acknowledgedAt").value(firstAck));
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId + 1000).with(user(ana)))
+                .andExpect(status().isNotFound());
+
+        // El encargado y el administrador ven quien ha confirmado y quien falta
+        for (User caller : List.of(manager, admin)) {
+            mockMvc.perform(get("/api/v1/dispatch/wave-calls/{id}", callId).with(user(caller)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.recipientCount").value(2))
+                    .andExpect(jsonPath("$.acknowledgedCount").value(1))
+                    .andExpect(jsonPath("$.recipients[0].driverUsername").value("ana"))
+                    .andExpect(jsonPath("$.recipients[0].acknowledged").value(true))
+                    .andExpect(jsonPath("$.recipients[0].acknowledgedAt").value(firstAck))
+                    .andExpect(jsonPath("$.recipients[1].driverUsername").value("bea"))
+                    .andExpect(jsonPath("$.recipients[1].acknowledged").value(false));
+        }
+
+        // Una segunda llamada el mismo dia, con otro texto: es otra llamada, sin confirmar, y sale la primera
+        mockMvc.perform(post(callUrl, wave1.getId()).with(user(admin)).contentType(json)
+                        .content("{\"message\": \"Esperad en el muelle\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message").value("Esperad en el muelle"));
+        mockMvc.perform(get("/api/v1/wave-calls/me").with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].message").value("Esperad en el muelle"))
+                .andExpect(jsonPath("$[0].acknowledged").value(false))
+                .andExpect(jsonPath("$[1].id").value(callId))
+                .andExpect(jsonPath("$[1].acknowledged").value(true));
+        mockMvc.perform(get("/api/v1/dispatch/wave-calls").with(user(manager)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].message").value("Esperad en el muelle"));
+
+        // Solo un administrador crea encargados, y el nuevo puede iniciar la llamada pero no administrar
+        mockMvc.perform(post("/api/v1/admin/users/managers").with(user(manager)).contentType(json)
+                        .content("{\"username\": \"encargado2\", \"password\": \"password-segura-123\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/v1/admin/users/managers").with(user(admin)).contentType(json)
+                        .content("{\"username\": \"encargado2\", \"password\": \"password-segura-123\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.role").value("MANAGER"));
+        mockMvc.perform(get("/api/v1/admin/waves").with(user(manager)))
+                .andExpect(status().isForbidden());
     }
 
     @Test

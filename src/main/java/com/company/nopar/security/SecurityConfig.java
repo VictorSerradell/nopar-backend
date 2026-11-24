@@ -56,6 +56,8 @@ public class SecurityConfig {
                         // ese reenvío, si se exigiera autenticación todo error saldría como un 401 vacío
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        // dar la orden de subir a una ola: administradores y encargados
+                        .requestMatchers("/api/v1/dispatch/**").hasAnyRole("ADMIN", "MANAGER")
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

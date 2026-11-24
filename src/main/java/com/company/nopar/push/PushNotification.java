@@ -1,6 +1,7 @@
 package com.company.nopar.push;
 
 import com.company.nopar.service.ShiftChangedEvent;
+import com.company.nopar.service.WaveCalledEvent;
 
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
@@ -16,6 +17,10 @@ public record PushNotification(String title, String body, Map<String, String> da
 
     /** Un texto largo no cabe en la notificación: el resto se lee en la app. */
     static final int MAX_BODY_CHARS = 140;
+
+    static final String WAVE_CALL_TYPE = "wave_call";
+    /** Debe coincidir con PushChannel.WAVE_CALLS de la app Android. */
+    static final String WAVE_CALL_CHANNEL = "nopar_wave_calls";
 
     private static final Locale SPANISH = Locale.forLanguageTag("es-ES");
     private static final DateTimeFormatter DAY_FORMAT = DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", SPANISH);
@@ -64,6 +69,29 @@ public record PushNotification(String title, String body, Map<String, String> da
             data.put("shiftId", event.shiftId().toString());
         }
         return new PushNotification(title, abbreviate(body.toString(), MAX_BODY_CHARS), data);
+    }
+
+    /**
+     * La orden de subir a una ola: "Ola 1: Subid" y qué hacer. En data, type = "wave_call" y waveCallId le dicen a la
+     * app qué llamada mostrar (con su botón "Enterado") al abrir la notificación.
+     */
+    public static PushNotification forWaveCall(WaveCalledEvent event) {
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("type", WAVE_CALL_TYPE);
+        data.put("waveCallId", event.waveCallId().toString());
+        data.put("waveId", event.waveId().toString());
+        data.put("workDate", event.workDate().toString());
+        return new PushNotification(event.waveName() + ": " + event.message(),
+                "Abre la app y pulsa «Enterado»", data);
+    }
+
+    /**
+     * Canal de notificaciones de Android en el que debe sonar esta notificación cuando la app está cerrada (con la app
+     * abierta lo elige la propia app). La orden de ola va en su canal, de importancia alta y con vibración propia;
+     * el resto, sin canal: Android usa el predeterminado de la app.
+     */
+    public String androidChannelId() {
+        return WAVE_CALL_TYPE.equals(data.get("type")) ? WAVE_CALL_CHANNEL : null;
     }
 
     /** El texto en una sola línea y, si pasa de maxCodePoints caracteres, cortado y terminado en «…». */
