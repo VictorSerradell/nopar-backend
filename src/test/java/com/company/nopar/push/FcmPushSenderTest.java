@@ -132,6 +132,10 @@ class FcmPushSenderTest {
         assertThat(claims.getIssuer()).isEqualTo(CLIENT_EMAIL);
         assertThat(claims.get("scope", String.class)).isEqualTo("https://www.googleapis.com/auth/firebase.messaging");
         assertThat(claims.getAudience()).containsExactly(baseUrl() + "/token");
+        // Google rechaza la aserción si "aud" es una lista: tiene que ir como cadena
+        String payload = new String(java.util.Base64.getUrlDecoder().decode(form.get("assertion").split("\\.")[1]),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(payload).contains("\"aud\":\"" + baseUrl() + "/token\"");
         assertThat(claims.getExpiration()).isAfter(claims.getIssuedAt());
     }
 

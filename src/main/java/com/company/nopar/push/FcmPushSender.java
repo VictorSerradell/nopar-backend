@@ -1,6 +1,5 @@
 package com.company.nopar.push;
 
-import io.jsonwebtoken.Jwts;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
@@ -20,13 +19,13 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
+import java.security.Signature;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -169,14 +168,7 @@ public class FcmPushSender implements PushSender {
 
     private void refreshAccessToken() {
         Instant now = Instant.now();
-        String assertion = Jwts.builder()
-                .issuer(clientEmail)
-                .claim("scope", SCOPE)
-                .audience().add(tokenUri.toString()).and()
-                .issuedAt(Date.from(now))
-                .expiration(Date.from(now.plus(Duration.ofHours(1))))
-                .signWith(privateKey, Jwts.SIG.RS256)
-                .compact();
+        String assertion = signedAssertion(now);
         String form = "grant_type=" + URLEncoder.encode(JWT_BEARER_GRANT, StandardCharsets.UTF_8)
                 + "&assertion=" + URLEncoder.encode(assertion, StandardCharsets.UTF_8);
 
@@ -220,6 +212,35 @@ public class FcmPushSender implements PushSender {
                     + "»: tiene que ser el JSON de una cuenta de servicio de Firebase");
         }
         return (String) value;
+    }
+
+    /**
+     * JWT firmado con la clave de la cuenta de servicio (RS256) que se cambia por el access token de FCM. Se arma a
+     * mano en vez de con el builder de JJWT: la 0.12 serializa "aud" siempre como lista, aunque tenga un solo valor,
+     * y el endpoint OAuth de Google exige una cadena (responde "Failed audience check").
+     */
+    private String signedAssertion(Instant now) {
+        Map<String, Object> header = new LinkedHashMap<>();
+        header.put("alg", "RS256");
+        header.put("typ", "JWT");
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("iss", clientEmail);
+        claims.put("scope", SCOPE);
+        claims.put("aud", tokenUri.toString());
+        claims.put("iat", now.getEpochSecond());
+        claims.put("exp", now.plus(Duration.ofHours(1)).getEpochSecond());
+
+        Base64.Encoder base64Url = Base64.getUrlEncoder().withoutPadding();
+        String signingInput = base64Url.encodeToString(JSON.writeValueAsString(header).getBytes(StandardCharsets.UTF_8))
+                + "." + base64Url.encodeToString(JSON.writeValueAsString(claims).getBytes(StandardCharsets.UTF_8));
+        try {
+            Signature signature = Signature.getInstance("SHA256withRSA");
+            signature.initSign(privateKey);
+            signature.update(signingInput.getBytes(StandardCharsets.US_ASCII));
+            return signingInput + "." + base64Url.encodeToString(signature.sign());
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("No se pudo firmar la aserción de FCM", e);
+        }
     }
 
     private static PrivateKey parsePrivateKey(String pem) {
