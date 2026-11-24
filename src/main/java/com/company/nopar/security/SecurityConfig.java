@@ -52,6 +52,9 @@ public class SecurityConfig {
                         // contrato OpenAPI y Swagger UI: los equipos de Android, iOS y web los leen sin token
                         // (en producción se desactivan con OPENAPI_ENABLED=false)
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        // /error es adonde Spring reenvía las respuestas de error (403 de @PreAuthorize, 500...). Sin token en
+                        // ese reenvío, si se exigiera autenticación todo error saldría como un 401 vacío
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
