@@ -25,6 +25,7 @@ import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.repository.AnnouncementReadRepository;
 import com.company.nopar.repository.AnnouncementRepository;
+import com.company.nopar.repository.DeviceTokenRepository;
 import com.company.nopar.repository.RefreshTokenRepository;
 import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.UserRepository;
@@ -33,6 +34,7 @@ import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.VehicleReturnRepository;
 import com.company.nopar.repository.WaveRepository;
 import com.company.nopar.service.AnnouncementService;
+import com.company.nopar.service.DeviceService;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.ShiftService;
@@ -78,6 +80,7 @@ import java.time.LocalTime;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -170,6 +173,8 @@ class PostgresIntegrationTest {
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
     @Autowired
+    private DeviceTokenRepository deviceTokenRepository;
+    @Autowired
     private ExpiredRefreshTokenCleanup expiredRefreshTokenCleanup;
     @Autowired
     private VehicleInspectionRepository inspectionRepository;
@@ -193,6 +198,7 @@ class PostgresIntegrationTest {
         announcementReadRepository.deleteAllInBatch();
         announcementRepository.deleteAllInBatch();
         refreshTokenRepository.deleteAllInBatch();
+        deviceTokenRepository.deleteAllInBatch();
         vehicleReturnRepository.deleteAllInBatch();
         inspectionRepository.deleteAllInBatch();
         vehicleRepository.deleteAllInBatch();
@@ -220,7 +226,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -228,6 +234,7 @@ class PostgresIntegrationTest {
                 "idx_vehicle_inspections_date",
                 "idx_vehicle_inspections_shift",
                 "idx_refresh_tokens_user",
+                "idx_device_tokens_user",
                 "idx_vehicle_returns_vehicle_date",
                 "idx_shift_assignments_driver_date",
                 "idx_shift_assignments_vehicle",
@@ -238,7 +245,8 @@ class PostgresIntegrationTest {
                 "uk_waves_name",
                 "uk_shift_assignments_driver_day",
                 "uk_shift_assignments_vehicle_day",
-                "uk_announcement_reads_announcement_user");
+                "uk_announcement_reads_announcement_user",
+                "uk_device_tokens_token");
     }
 
     // ------------------------------------------------------------------ listados paginados
@@ -626,6 +634,11 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/admin/announcements/{id}/reads'].get").exists())
                 .andExpect(jsonPath("$.components.schemas.BoardAnnouncementResponse.properties.read").exists())
                 .andExpect(jsonPath("$.components.schemas.PageResponseBoardAnnouncementResponse.properties.content.items").exists())
+                // dispositivos para las notificaciones push: se registran con POST y se dan de baja con el token en la query
+                .andExpect(jsonPath("$.paths['/api/v1/devices'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/devices'].delete.parameters[?(@.name == 'token')]").isNotEmpty())
+                .andExpect(jsonPath("$.components.schemas.DeviceRegistrationRequest.properties.token").exists())
+                .andExpect(jsonPath("$.components.schemas.DeviceRegistrationRequest.properties.platform").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
                 .andExpect(jsonPath("$.components.schemas.User").doesNotExist())
                 .andExpect(jsonPath("$.paths..parameters[?(@.name in ['currentUser', 'currentAdmin'])]").isEmpty());
@@ -916,6 +929,76 @@ class PostgresIntegrationTest {
                 .andExpect(status().isNotFound());
         mockMvc.perform(delete("/api/v1/admin/waves/{id}", late).with(user(admin)))
                 .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void devicesAreRegisteredPerUserAndMoveToWhoeverUsesThePhoneNext() throws Exception {
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        MediaType json = MediaType.APPLICATION_JSON;
+        String registration = """
+                {"token": "tok-movil-ana", "platform": "ANDROID"}
+                """;
+
+        mockMvc.perform(post("/api/v1/devices").contentType(json).content(registration))
+                .andExpect(status().isUnauthorized());
+
+        // El registro es idempotente: repetirlo no duplica el dispositivo
+        mockMvc.perform(post("/api/v1/devices").with(user(ana)).contentType(json).content(registration))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(post("/api/v1/devices").with(user(ana)).contentType(json).content(registration))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.count()).isEqualTo(1);
+        assertThat(deviceTokenRepository.countByUserId(ana.getId())).isEqualTo(1);
+
+        // Bea inicia sesion en ese mismo movil: el token pasa a ella y Ana deja de recibir lo suyo
+        mockMvc.perform(post("/api/v1/devices").with(user(bea)).contentType(json).content(registration))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.count()).isEqualTo(1);
+        assertThat(deviceTokenRepository.countByUserId(ana.getId())).isZero();
+        assertThat(deviceTokenRepository.countByUserId(bea.getId())).isEqualTo(1);
+
+        // Nadie da de baja el dispositivo de otro; su dueño si, y repetirlo no falla
+        mockMvc.perform(delete("/api/v1/devices").param("token", "tok-movil-ana").with(user(ana)))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.count()).isEqualTo(1);
+        mockMvc.perform(delete("/api/v1/devices").param("token", "tok-movil-ana"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(delete("/api/v1/devices").param("token", "tok-movil-ana").with(user(bea)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/v1/devices").param("token", "tok-movil-ana").with(user(bea)))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.count()).isZero();
+
+        // Los datos no validos se rechazan y los administradores tambien pueden registrar su dispositivo
+        mockMvc.perform(post("/api/v1/devices").with(user(ana)).contentType(json).content("""
+                        {"token": " ", "platform": "ANDROID"}
+                        """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.token").value("El token del dispositivo es obligatorio"));
+        mockMvc.perform(post("/api/v1/devices").with(user(admin)).contentType(json).content("""
+                        {"token": "tok-web-admin", "platform": "WEB"}
+                        """))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.countByUserId(admin.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void aUserKeepsOnlyTheMostRecentlyRegisteredDevices() throws Exception {
+        User ana = saveUser("ana", User.Role.DRIVER);
+        int total = DeviceService.MAX_DEVICES_PER_USER + 2;
+
+        for (int i = 1; i <= total; i++) {
+            mockMvc.perform(post("/api/v1/devices").with(user(ana)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"token\": \"tok-%d\", \"platform\": \"IOS\"}".formatted(i)))
+                    .andExpect(status().isNoContent());
+        }
+
+        // se descartan los dos primeros: quedan los mas recientes
+        List<String> kept = deviceTokenRepository.findAll().stream().map(device -> device.getToken()).toList();
+        assertThat(kept).containsExactlyInAnyOrderElementsOf(
+                IntStream.rangeClosed(3, total).mapToObj(i -> "tok-" + i).toList());
     }
 
     @Test
