@@ -10,6 +10,8 @@
 .env.*
 target
 uploads
+secrets
+*-firebase-adminsdk-*.json
 HELP.md
 *.log
 docker-compose*.yml

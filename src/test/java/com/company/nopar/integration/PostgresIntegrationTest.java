@@ -12,6 +12,7 @@ import com.company.nopar.dto.ShiftResponse;
 import com.company.nopar.dto.VehicleReturnRequest;
 import com.company.nopar.dto.VehicleReturnResponse;
 import com.company.nopar.entity.Announcement;
+import com.company.nopar.entity.DeviceToken;
 import com.company.nopar.entity.RefreshToken;
 import com.company.nopar.entity.ShiftAssignment;
 import com.company.nopar.entity.User;
@@ -23,6 +24,7 @@ import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
+import com.company.nopar.push.PushSender;
 import com.company.nopar.repository.AnnouncementReadRepository;
 import com.company.nopar.repository.AnnouncementRepository;
 import com.company.nopar.repository.DeviceTokenRepository;
@@ -57,6 +59,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -79,7 +82,11 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,6 +94,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -100,7 +113,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V6) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V8) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -115,6 +128,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         // Ni el .env local ni un administrador inicial deben influir en estos tests
         "application.bootstrap.admin.username=",
         "application.bootstrap.admin.password=",
+        // Ni unas credenciales de Firebase del .env local: el envio push se sustituye por un doble en estos tests
+        "application.push.fcm.enabled=false",
         // El reseteo nocturno no debe dispararse durante los tests: se invoca a mano
         "application.fleet.nightly-reset.cron=-",
         "application.security.refresh-token-cleanup.cron=-"
@@ -174,6 +189,11 @@ class PostgresIntegrationTest {
     private RefreshTokenRepository refreshTokenRepository;
     @Autowired
     private DeviceTokenRepository deviceTokenRepository;
+    @Autowired
+    private DeviceService deviceService;
+    // El envio real a Firebase no se prueba aqui: se sustituye por un doble para ver a quien se le enviaria
+    @MockitoBean
+    private PushSender pushSender;
     @Autowired
     private ExpiredRefreshTokenCleanup expiredRefreshTokenCleanup;
     @Autowired
@@ -633,6 +653,8 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/admin/announcements/{id}'].patch").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/admin/announcements/{id}/reads'].get").exists())
                 .andExpect(jsonPath("$.components.schemas.BoardAnnouncementResponse.properties.read").exists())
+                // publicar un aviso en silencio (sin notificación push) es opcional
+                .andExpect(jsonPath("$.components.schemas.AnnouncementRequest.properties.notifyDrivers").exists())
                 .andExpect(jsonPath("$.components.schemas.PageResponseBoardAnnouncementResponse.properties.content.items").exists())
                 // dispositivos para las notificaciones push: se registran con POST y se dan de baja con el token en la query
                 .andExpect(jsonPath("$.paths['/api/v1/devices'].post").exists())
@@ -985,6 +1007,53 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void publishingAnAnnouncementNotifiesTheDriversInTheBackgroundAndDropsTheUnregisteredDevices() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        deviceService.registerDevice(ana, "tok-ana-movil", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(ana, "tok-ana-web", DeviceToken.Platform.WEB);
+        deviceService.registerDevice(bea, "tok-bea", DeviceToken.Platform.IOS);
+        deviceService.registerDevice(admin, "tok-admin", DeviceToken.Platform.WEB);
+        MediaType json = MediaType.APPLICATION_JSON;
+        // Firebase da por no registrado el movil de Ana (desinstalo la app)
+        when(pushSender.send(argThat(notification -> "Lockers".equals(notification.title())), anyCollection()))
+                .thenReturn(List.of("tok-ana-movil"));
+
+        long id = idOf(mockMvc.perform(post("/api/v1/admin/announcements").with(user(admin)).contentType(json).content("""
+                        {"title": "Lockers", "body": "Recordad cerrar la puerta", "pinned": true}
+                        """))
+                .andExpect(status().isCreated()));
+
+        // Se envia en segundo plano, con el id del aviso para abrirlo, a los dispositivos de los conductores (no al del administrador)
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Recordad cerrar la puerta".equals(notification.body())
+                        && notification.data().equals(Map.of("type", "announcement", "announcementId", String.valueOf(id)))),
+                argThat(tokens -> new HashSet<>(tokens).equals(Set.of("tok-ana-movil", "tok-ana-web", "tok-bea"))));
+        // y el token que Firebase da por no registrado se borra
+        eventually(() -> deviceTokenRepository.findAll().stream()
+                .noneMatch(device -> "tok-ana-movil".equals(device.getToken())));
+        assertThat(deviceTokenRepository.findAll()).extracting(DeviceToken::getToken)
+                .containsExactlyInAnyOrder("tok-ana-web", "tok-bea", "tok-admin");
+
+        // En silencio: el aviso se publica pero nadie recibe la notificacion
+        mockMvc.perform(post("/api/v1/admin/announcements").with(user(admin)).contentType(json).content("""
+                        {"title": "Silencioso", "body": "Sin notificacion", "notifyDrivers": false}
+                        """))
+                .andExpect(status().isCreated());
+        verify(pushSender, after(500).never()).send(
+                argThat(notification -> "Silencioso".equals(notification.title())), anyCollection());
+
+        // Corregir un aviso no vuelve a notificar
+        mockMvc.perform(patch("/api/v1/admin/announcements/{id}", id).with(user(admin)).contentType(json).content("""
+                        {"title": "Lockers corregido"}
+                        """))
+                .andExpect(status().isOk());
+        verify(pushSender, after(500).never()).send(
+                argThat(notification -> "Lockers corregido".equals(notification.title())), anyCollection());
+    }
+
+    @Test
     void aUserKeepsOnlyTheMostRecentlyRegisteredDevices() throws Exception {
         User ana = saveUser("ana", User.Role.DRIVER);
         int total = DeviceService.MAX_DEVICES_PER_USER + 2;
@@ -1283,11 +1352,11 @@ class PostgresIntegrationTest {
     void theBoardIsBuiltOutsideTheTransactionInPinnedThenNewestOrderWithoutNPlusOne() {
         User admin = saveUser("admin1", User.Role.ADMIN);
         User driver = saveUser("driver1", User.Role.DRIVER);
-        Announcement one = announcementService.createAnnouncement(new AnnouncementRequest("Uno", "Texto uno", false), admin);
-        announcementService.createAnnouncement(new AnnouncementRequest("Dos", "Texto dos", true), admin);
-        announcementService.createAnnouncement(new AnnouncementRequest("Tres", "Texto tres", false), admin);
-        announcementService.createAnnouncement(new AnnouncementRequest("Cuatro", "Texto cuatro", false), admin);
-        Announcement five = announcementService.createAnnouncement(new AnnouncementRequest("Cinco", "Texto cinco", true), admin);
+        Announcement one = announcementService.createAnnouncement(new AnnouncementRequest("Uno", "Texto uno", false, null), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Dos", "Texto dos", true, null), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Tres", "Texto tres", false, null), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Cuatro", "Texto cuatro", false, null), admin);
+        Announcement five = announcementService.createAnnouncement(new AnnouncementRequest("Cinco", "Texto cinco", true, null), admin);
         announcementService.markAsRead(one.getId(), driver);
         announcementService.markAsRead(five.getId(), driver);
 
@@ -1366,6 +1435,17 @@ class PostgresIntegrationTest {
         InspectionCreateRequest request = new InspectionCreateRequest(
                 vehicle.getId(), kilometers, true, true, true, damages, true, true, true);
         return inspectionService.createInspection(request, odometerPhoto(), null, null, driver);
+    }
+
+    /** Espera (hasta 5 segundos) a que algo que ocurre en segundo plano se cumpla. */
+    private static void eventually(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("La condición no se cumplió en 5 segundos");
+            }
+            Thread.sleep(50);
+        }
     }
 
     /** El parte tal como queda en la base de datos, con los datos que necesita la respuesta. */

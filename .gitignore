@@ -8,6 +8,9 @@ target/
 /out/
 .env
 uploads/
+# Credenciales de Firebase (notificaciones push): nunca al repositorio
+secrets/
+*-firebase-adminsdk-*.json
 
 ### STS ###
 .apt_generated

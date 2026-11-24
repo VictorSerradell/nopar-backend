@@ -11,11 +11,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class DeviceServiceTest {
@@ -47,6 +49,20 @@ class DeviceServiceTest {
         deviceService.unregisterDevice(driver(7L), " token-abc ");
 
         verify(deviceTokenRepository).deleteByTokenAndUserId("token-abc", 7L);
+    }
+
+    @Test
+    void givenUnregisteredTokens_whenRemoveInvalidTokens_thenTheyAreDeletedInOneStatement() {
+        deviceService.removeInvalidTokens(List.of("tok-1", "tok-2"));
+
+        verify(deviceTokenRepository).deleteByTokenIn(List.of("tok-1", "tok-2"));
+    }
+
+    @Test
+    void givenNoTokens_whenRemoveInvalidTokens_thenTheDatabaseIsNotTouched() {
+        deviceService.removeInvalidTokens(List.of());
+
+        verifyNoInteractions(deviceTokenRepository);
     }
 
     private static User driver(Long id) {

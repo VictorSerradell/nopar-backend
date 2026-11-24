@@ -1,6 +1,7 @@
 package com.company.nopar.repository;
 
 import com.company.nopar.entity.DeviceToken;
+import com.company.nopar.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -8,6 +9,8 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
 
 @Repository
 public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> {
@@ -42,6 +45,15 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
     @Modifying
     @Query("delete from DeviceToken d where d.token = :token and d.user.id = :userId")
     int deleteByTokenAndUserId(@Param("token") String token, @Param("userId") Long userId);
+
+    /** Los tokens de todos los dispositivos de los usuarios con ese rol: a quién se envía un aviso. */
+    @Query("select d.token from DeviceToken d where d.user.role = :role order by d.id")
+    List<String> findTokensByUserRole(@Param("role") User.Role role);
+
+    /** Borra de una sola sentencia estos tokens (los que FCM da por no registrados); devuelve cuántos. */
+    @Modifying
+    @Query("delete from DeviceToken d where d.token in :tokens")
+    int deleteByTokenIn(@Param("tokens") Collection<String> tokens);
 
     long countByUserId(Long userId);
 }

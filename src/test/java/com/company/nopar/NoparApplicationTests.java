@@ -19,7 +19,9 @@ import java.util.Base64;
 @SpringBootTest(properties = {
         // Ni el .env local ni un administrador inicial deben influir en este test
         "application.bootstrap.admin.username=",
-        "application.bootstrap.admin.password="
+        "application.bootstrap.admin.password=",
+        // Ni unas credenciales de Firebase del .env local: el arranque no debe depender de ellas
+        "application.push.fcm.enabled=false"
 })
 @Testcontainers
 class NoparApplicationTests {

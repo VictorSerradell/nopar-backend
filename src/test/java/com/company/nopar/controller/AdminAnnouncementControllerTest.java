@@ -67,7 +67,20 @@ class AdminAnnouncementControllerTest {
                 .andExpect(jsonPath("$..password").isEmpty());
 
         verify(announcementService).createAnnouncement(
-                eq(new AnnouncementRequest("Lockers", "Recordad cerrar la puerta", true)), any());
+                eq(new AnnouncementRequest("Lockers", "Recordad cerrar la puerta", true, null)), any());
+    }
+
+    @Test
+    void givenNotifyDriversFalse_whenCreate_thenTheServiceReceivesTheSilentPublication() throws Exception {
+        when(announcementService.createAnnouncement(any(), any())).thenReturn(announcement(5L));
+
+        mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content("""
+                        {"title": "Lockers", "body": "Texto", "notifyDrivers": false}
+                        """))
+                .andExpect(status().isCreated());
+
+        verify(announcementService).createAnnouncement(
+                eq(new AnnouncementRequest("Lockers", "Texto", null, false)), any());
     }
 
     @Test

@@ -35,7 +35,7 @@ public class AdminAnnouncementController {
     private final AnnouncementService announcementService;
 
     @Operation(summary = "Publica un aviso",
-            description = "Título (máximo 120 caracteres) y texto (máximo 4000). Con pinned a true queda fijado al principio del tablón.")
+            description = "Título (máximo 120 caracteres) y texto (máximo 4000). Con pinned a true queda fijado al principio del tablón. Los conductores reciben una notificación push, salvo que se envíe notifyDrivers a false (publicación en silencio). Modificar un aviso no vuelve a notificar.")
     @PostMapping
     public ResponseEntity<AnnouncementResponse> createAnnouncement(
             @Valid @RequestBody AnnouncementRequest request,

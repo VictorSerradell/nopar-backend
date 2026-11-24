@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -45,6 +46,9 @@ class AnnouncementServiceTest {
     @Mock
     private AnnouncementReadRepository readRepository;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     @InjectMocks
     private AnnouncementService announcementService;
 
@@ -56,7 +60,7 @@ class AnnouncementServiceTest {
         when(announcementRepository.save(any(Announcement.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         Announcement created = announcementService.createAnnouncement(
-                new AnnouncementRequest("  Lockers  ", "  Recordad cerrar la puerta  ", null), admin);
+                new AnnouncementRequest("  Lockers  ", "  Recordad cerrar la puerta  ", null, null), admin);
 
         assertThat(created.getTitle()).isEqualTo("Lockers");
         assertThat(created.getBody()).isEqualTo("Recordad cerrar la puerta");
@@ -69,9 +73,45 @@ class AnnouncementServiceTest {
         when(announcementRepository.save(any(Announcement.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         Announcement created = announcementService.createAnnouncement(
-                new AnnouncementRequest("Lockers", "Texto", true), user(1L, "admin1"));
+                new AnnouncementRequest("Lockers", "Texto", true, null), user(1L, "admin1"));
 
         assertThat(created.isPinned()).isTrue();
+    }
+
+    @Test
+    void givenRequest_whenCreate_thenPublishesTheEventThatNotifiesTheDrivers() {
+        when(announcementRepository.save(any(Announcement.class))).thenAnswer(invocation -> {
+            Announcement saved = invocation.getArgument(0);
+            saved.setId(9L);
+            return saved;
+        });
+
+        announcementService.createAnnouncement(
+                new AnnouncementRequest("  Lockers  ", "  Recordad cerrar la puerta  ", false, null), user(1L, "admin1"));
+
+        verify(eventPublisher).publishEvent(new AnnouncementPublishedEvent(9L, "Lockers", "Recordad cerrar la puerta"));
+    }
+
+    @Test
+    void givenNotifyDriversTrue_whenCreate_thenPublishesTheEvent() {
+        when(announcementRepository.save(any(Announcement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        announcementService.createAnnouncement(
+                new AnnouncementRequest("Lockers", "Texto", false, true), user(1L, "admin1"));
+
+        verify(eventPublisher).publishEvent(any(AnnouncementPublishedEvent.class));
+    }
+
+    @Test
+    void givenSilentPublication_whenCreate_thenTheAnnouncementIsSavedButNobodyIsNotified() {
+        when(announcementRepository.save(any(Announcement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Announcement created = announcementService.createAnnouncement(
+                new AnnouncementRequest("Lockers", "Texto", false, false), user(1L, "admin1"));
+
+        assertThat(created.getTitle()).isEqualTo("Lockers");
+        verify(announcementRepository).save(created);
+        verifyNoInteractions(eventPublisher);
     }
 
     // ---------------------------------------------------------------- modificación

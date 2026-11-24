@@ -11,6 +11,7 @@ import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.AnnouncementReadRepository;
 import com.company.nopar.repository.AnnouncementRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -29,7 +30,13 @@ public class AnnouncementService {
 
     private final AnnouncementRepository announcementRepository;
     private final AnnouncementReadRepository readRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
+    /**
+     * Publica el aviso. Salvo que se pida en silencio (notifyDrivers a false), se publica un evento: cuando la
+     * transacción se confirma, los conductores reciben la notificación push. Si el envío falla el aviso ya está
+     * publicado: la notificación es un extra y nunca bloquea ni deshace la publicación.
+     */
     @Transactional
     public Announcement createAnnouncement(AnnouncementRequest request, User actor) {
         Announcement announcement = new Announcement();
@@ -37,7 +44,11 @@ public class AnnouncementService {
         announcement.setBody(request.body().strip());
         announcement.setPinned(Boolean.TRUE.equals(request.pinned()));
         announcement.setCreatedBy(actor);
-        return announcementRepository.save(announcement);
+        Announcement saved = announcementRepository.save(announcement);
+        if (request.shouldNotify()) {
+            eventPublisher.publishEvent(new AnnouncementPublishedEvent(saved.getId(), saved.getTitle(), saved.getBody()));
+        }
+        return saved;
     }
 
     /** Solo cambia los campos enviados. */
