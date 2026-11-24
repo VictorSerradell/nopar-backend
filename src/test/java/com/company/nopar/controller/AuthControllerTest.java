@@ -7,6 +7,7 @@ import com.company.nopar.repository.UserRepository;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.RefreshTokenService.IssuedRefreshToken;
+import com.company.nopar.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +52,11 @@ class AuthControllerTest {
 
     @MockitoBean
     private RefreshTokenService refreshTokenService;
+
+    // El cambio de contraseña necesita el usuario autenticado y se prueba con la cadena de seguridad real en
+    // AuthEndpointsSecurityTest; aquí no hay filtros, así que solo hace falta el bean para que el contexto arranque
+    @MockitoBean
+    private UserService userService;
 
     @Test
     void testLoginSuccess() throws Exception {

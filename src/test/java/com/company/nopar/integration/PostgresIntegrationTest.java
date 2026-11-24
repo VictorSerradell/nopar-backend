@@ -36,6 +36,7 @@ import com.company.nopar.service.AnnouncementService;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.ShiftService;
+import com.company.nopar.service.UserService;
 import com.company.nopar.service.VehicleReturnService;
 import com.company.nopar.service.VehicleService;
 import com.jayway.jsonpath.JsonPath;
@@ -150,6 +151,8 @@ class PostgresIntegrationTest {
     private VehicleReturnRepository vehicleReturnRepository;
     @Autowired
     private ShiftService shiftService;
+    @Autowired
+    private UserService userService;
     @Autowired
     private ShiftAssignmentRepository shiftAssignmentRepository;
     @Autowired
@@ -587,6 +590,11 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/auth/refresh'].post.security").isEmpty())
                 .andExpect(jsonPath("$.paths['/api/v1/auth/logout'].post.security").isEmpty())
                 .andExpect(jsonPath("$.paths['/api/v1/auth/logout-all'].post.security").doesNotExist())
+                // cambiar la contraseña exige token (hereda el requisito global) y el cuerpo lleva la actual y la nueva
+                .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch.security").doesNotExist())
+                .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.currentPassword").exists())
+                .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.newPassword").exists())
                 // el alta del parte es multipart y la foto se describe como imagen binaria
                 .andExpect(jsonPath("$.paths['/api/v1/inspections'].post.requestBody.content['multipart/form-data']").exists())
                 .andExpect(jsonPath(photoPath + "['image/jpeg']").exists())
@@ -657,6 +665,63 @@ class PostgresIntegrationTest {
         assertThat(refreshTokenRepository.count()).isZero();
         assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(laptop))
                 .isInstanceOf(InvalidRefreshTokenException.class);
+    }
+
+    @Test
+    void changingThePasswordKeepsThisDeviceLoggedInAndClosesEveryOtherSession() throws Exception {
+        userService.createDriver("driver1", "clave-vieja-123");
+
+        // Dos dispositivos con la sesión iniciada de verdad: login contra la BD, con BCrypt y JWT reales
+        ResultActions phone = login("driver1", "clave-vieja-123").andExpect(status().isOk());
+        String phoneAccess = field(phone, "accessToken");
+        String phoneRefresh = field(phone, "refreshToken");
+        String tabletRefresh = field(login("driver1", "clave-vieja-123").andExpect(status().isOk()), "refreshToken");
+        assertThat(refreshTokenRepository.count()).isEqualTo(2);
+
+        String change = "{\"currentPassword\": \"clave-vieja-123\", \"newPassword\": \"clave-nueva-456\"}";
+
+        // Sin access token no se puede cambiar la contraseña
+        mockMvc.perform(patch("/api/v1/auth/password").contentType(MediaType.APPLICATION_JSON).content(change))
+                .andExpect(status().isUnauthorized());
+
+        // Con la contraseña actual equivocada: 400 (no 401) y las sesiones siguen abiertas
+        mockMvc.perform(patch("/api/v1/auth/password")
+                        .header("Authorization", "Bearer " + phoneAccess)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\": \"no-es-esta-1\", \"newPassword\": \"clave-nueva-456\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("La contraseña actual no es correcta"));
+        assertThat(refreshTokenRepository.count()).isEqualTo(2);
+
+        // Con la actual correcta: 200 y un par de tokens nuevo para este dispositivo
+        ResultActions changed = mockMvc.perform(patch("/api/v1/auth/password")
+                        .header("Authorization", "Bearer " + phoneAccess)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(change))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty());
+        String newAccess = field(changed, "accessToken");
+        String newRefresh = field(changed, "refreshToken");
+
+        // Todas las sesiones anteriores quedan cerradas: solo sobrevive el refresh token recién emitido
+        assertThat(refreshTokenRepository.count()).isEqualTo(1);
+        assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(phoneRefresh))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+        assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(tabletRefresh))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        // Los tokens nuevos funcionan: el access token autentica y el refresh token renueva la sesión
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\": \"" + newRefresh + "\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/auth/logout-all").header("Authorization", "Bearer " + newAccess))
+                .andExpect(status().isNoContent());
+
+        // La contraseña vieja ya no sirve y la nueva sí
+        login("driver1", "clave-vieja-123").andExpect(status().isUnauthorized());
+        login("driver1", "clave-nueva-456").andExpect(status().isOk());
     }
 
     // ------------------------------------------------------------------ limpieza de refresh tokens
@@ -1093,6 +1158,16 @@ class PostgresIntegrationTest {
     }
 
     /** El id de la respuesta JSON de un alta. */
+    private ResultActions login(String username, String password) throws Exception {
+        return mockMvc.perform(post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\": \"" + username + "\", \"password\": \"" + password + "\"}"));
+    }
+
+    private static String field(ResultActions result, String name) throws Exception {
+        return JsonPath.read(result.andReturn().getResponse().getContentAsString(), "$." + name);
+    }
+
     private static long idOf(ResultActions result) throws Exception {
         String body = result.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         Number id = JsonPath.read(body, "$.id");

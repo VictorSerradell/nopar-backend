@@ -1,12 +1,14 @@
 package com.company.nopar.controller;
 
 import com.company.nopar.dto.AuthRequest;
+import com.company.nopar.dto.ChangePasswordRequest;
 import com.company.nopar.dto.RefreshTokenRequest;
 import com.company.nopar.dto.TokenResponse;
 import com.company.nopar.entity.User;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.RefreshTokenService;
+import com.company.nopar.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +31,7 @@ public class AuthController {
     private final UserRepository userRepository;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
+    private final UserService userService;
 
     @Operation(summary = "Inicia sesión",
             description = "Devuelve un access token (15 minutos) y un refresh token (7 días). No requiere autenticación.")
@@ -70,6 +73,25 @@ public class AuthController {
     public ResponseEntity<Void> logoutAll(@AuthenticationPrincipal User currentUser) {
         refreshTokenService.deleteByUser(currentUser.getUsername());
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Cambio de contraseña del usuario autenticado. Cierra todas sus sesiones (otros dispositivos incluidos) y
+     * devuelve un par de tokens nuevo para este dispositivo, de modo que el usuario no tenga que volver a iniciar
+     * sesión; el cliente debe guardar los nuevos y descartar los anteriores.
+     */
+    @Operation(summary = "Cambia la contraseña",
+            description = "Exige la contraseña actual. Revoca todos los refresh tokens del usuario (en todos sus dispositivos) y devuelve un par de tokens nuevo para este: el cliente debe guardarlo y descartar el anterior. Los access tokens ya emitidos valen hasta que caduquen (15 minutos).")
+    @ApiResponse(responseCode = "400", description = "Contraseña actual incorrecta, nueva contraseña no válida o igual a la actual. Es un 400 y no un 401: el usuario sigue autenticado")
+    @PatchMapping("/password")
+    public ResponseEntity<TokenResponse> changePassword(@AuthenticationPrincipal User currentUser,
+                                                        @Valid @RequestBody ChangePasswordRequest request) {
+        User updated = userService.changePassword(currentUser.getId(), request.currentPassword(), request.newPassword());
+
+        var accessToken = jwtService.generateToken(updated);
+        var refreshToken = refreshTokenService.createRefreshToken(updated);
+
+        return ResponseEntity.ok(new TokenResponse(accessToken, refreshToken.token()));
     }
 
     @Operation(summary = "Renueva la sesión",
