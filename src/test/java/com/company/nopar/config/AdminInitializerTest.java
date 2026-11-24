@@ -2,6 +2,7 @@ package com.company.nopar.config;
 
 import com.company.nopar.entity.User;
 import com.company.nopar.exception.DuplicateResourceException;
+import com.company.nopar.exception.InvalidRequestException;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.service.UserService;
 import jakarta.validation.Validation;
@@ -92,6 +93,20 @@ class AdminInitializerTest {
         assertThatThrownBy(() -> initializer("conductor1", PASSWORD).run(null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("elige otro ADMIN_USERNAME");
+    }
+
+    @Test
+    void givenAPasswordWithFewCharactersButOver72Bytes_whenRun_thenFailsFastWithoutLeakingIt() {
+        // Pasa la validación de longitud (37 caracteres), pero cada "ñ" ocupa 2 bytes: 74 en total
+        String tooManyBytes = "ñ".repeat(37);
+        when(userService.createUser("admin", tooManyBytes, User.Role.ADMIN))
+                .thenThrow(new InvalidRequestException("La contraseña no puede superar los 72 bytes en UTF-8"));
+
+        assertThatThrownBy(() -> initializer("admin", tooManyBytes).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ADMIN_PASSWORD no válida")
+                .hasMessageContaining("72 bytes")
+                .hasMessageNotContaining(tooManyBytes);
     }
 
     private AdminInitializer initializer(String username, String password) {

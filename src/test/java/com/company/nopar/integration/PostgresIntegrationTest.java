@@ -595,6 +595,9 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch.security").doesNotExist())
                 .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.currentPassword").exists())
                 .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.newPassword").exists())
+                // el administrador restablece la contraseña de un conductor sin conocer la actual
+                .andExpect(jsonPath("$.paths['/api/v1/admin/users/{id}/password'].patch").exists())
+                .andExpect(jsonPath("$.components.schemas.ResetPasswordRequest.properties.newPassword").exists())
                 // el alta del parte es multipart y la foto se describe como imagen binaria
                 .andExpect(jsonPath("$.paths['/api/v1/inspections'].post.requestBody.content['multipart/form-data']").exists())
                 .andExpect(jsonPath(photoPath + "['image/jpeg']").exists())
@@ -722,6 +725,48 @@ class PostgresIntegrationTest {
         // La contraseña vieja ya no sirve y la nueva sí
         login("driver1", "clave-vieja-123").andExpect(status().isUnauthorized());
         login("driver1", "clave-nueva-456").andExpect(status().isOk());
+    }
+
+    @Test
+    void anAdminResetsADriversPasswordWithoutTheCurrentOneAndOnlyADriversOverHttp() throws Exception {
+        User driver = userService.createDriver("driver1", "clave-olvidada-1");
+        User otherDriver = userService.createDriver("driver2", "otra-clave-123");
+        User admin = saveUser("admin1", User.Role.ADMIN);
+
+        // El conductor tiene sesión en dos dispositivos; el otro conductor, en uno, y no debe verse afectado
+        login("driver1", "clave-olvidada-1").andExpect(status().isOk());
+        login("driver1", "clave-olvidada-1").andExpect(status().isOk());
+        login("driver2", "otra-clave-123").andExpect(status().isOk());
+        assertThat(refreshTokenRepository.count()).isEqualTo(3);
+
+        String body = "{\"newPassword\": \"clave-nueva-456\"}";
+        String path = "/api/v1/admin/users/" + driver.getId() + "/password";
+
+        // Sin token: 401. Con el rol de conductor: 403. En ambos casos no cambia nada
+        mockMvc.perform(patch(path).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(patch(path).with(user(otherDriver)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+        assertThat(refreshTokenRepository.count()).isEqualTo(3);
+
+        // El administrador la restablece: 204 y se cierran las sesiones de ESE conductor, no las del otro
+        mockMvc.perform(patch(path).with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isNoContent());
+        assertThat(refreshTokenRepository.count()).isEqualTo(1);
+        login("driver1", "clave-olvidada-1").andExpect(status().isUnauthorized());
+        login("driver1", "clave-nueva-456").andExpect(status().isOk());
+        login("driver2", "otra-clave-123").andExpect(status().isOk());
+
+        // Un administrador no es un conductor: su contraseña se cambia con la actual (PATCH /api/v1/auth/password)
+        mockMvc.perform(patch("/api/v1/admin/users/" + admin.getId() + "/password")
+                        .with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Solo se puede restablecer la contraseña de un conductor"));
+
+        // Un usuario que no existe
+        mockMvc.perform(patch("/api/v1/admin/users/999999/password")
+                        .with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isNotFound());
     }
 
     // ------------------------------------------------------------------ limpieza de refresh tokens

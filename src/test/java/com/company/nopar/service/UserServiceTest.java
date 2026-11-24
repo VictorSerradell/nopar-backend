@@ -181,4 +181,70 @@ class UserServiceTest {
         user.setRole(User.Role.DRIVER);
         return user;
     }
+
+    @Test
+    void givenAPasswordOver72Bytes_whenCreateDriver_thenRejectedBeforeTouchingAnything() {
+        // 37 caracteres, pero cada "ñ" ocupa 2 bytes en UTF-8: 74 bytes, más de lo que BCrypt admite
+        String tooManyBytes = "ñ".repeat(37);
+
+        assertThatThrownBy(() -> userService.createDriver("conductor2", tooManyBytes))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("72 bytes");
+
+        verifyNoInteractions(userRepository, passwordEncoder);
+    }
+
+    // ------------------------------------------------------------------ restablecimiento por un administrador
+
+    @Test
+    void givenADriver_whenResetDriverPassword_thenStoresTheNewHashAndRevokesHisSessions() {
+        User driver = existingUser("conductor1", "$2a$10$olvidada");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+        when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
+
+        userService.resetDriverPassword(7L, "clave-nueva-456");
+
+        assertThat(driver.getPassword()).isEqualTo("$2a$10$nuevo");
+        verify(refreshTokenService).deleteByUser("conductor1");
+        // el administrador no necesita conocer la contraseña anterior
+        verify(passwordEncoder, never()).matches(any(), any());
+    }
+
+    @Test
+    void givenAnAdminAsTarget_whenResetDriverPassword_thenRejectedAndNothingChanges() {
+        User admin = existingUser("admin", "$2a$10$del-admin");
+        admin.setRole(User.Role.ADMIN);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> userService.resetDriverPassword(7L, "clave-nueva-456"))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessage("Solo se puede restablecer la contraseña de un conductor");
+
+        assertThat(admin.getPassword()).isEqualTo("$2a$10$del-admin");
+        verifyNoInteractions(passwordEncoder, refreshTokenService);
+    }
+
+    @Test
+    void givenAnUnknownUser_whenResetDriverPassword_thenNotFound() {
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.resetDriverPassword(99L, "clave-nueva-456"))
+                .isInstanceOf(ResourceNotFoundException.class);
+
+        verifyNoInteractions(passwordEncoder, refreshTokenService);
+    }
+
+    @Test
+    void givenAPasswordOver72Bytes_whenResetDriverPassword_thenRejectedAndSessionsStayOpen() {
+        String tooManyBytes = "ñ".repeat(37);
+        User driver = existingUser("conductor1", "$2a$10$olvidada");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        assertThatThrownBy(() -> userService.resetDriverPassword(7L, tooManyBytes))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("72 bytes");
+
+        assertThat(driver.getPassword()).isEqualTo("$2a$10$olvidada");
+        verifyNoInteractions(passwordEncoder, refreshTokenService);
+    }
 }

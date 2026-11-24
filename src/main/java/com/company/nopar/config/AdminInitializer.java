@@ -3,6 +3,7 @@ package com.company.nopar.config;
 import com.company.nopar.dto.CreateUserRequest;
 import com.company.nopar.entity.User;
 import com.company.nopar.exception.DuplicateResourceException;
+import com.company.nopar.exception.InvalidRequestException;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.service.UserService;
 import jakarta.validation.ConstraintViolation;
@@ -82,6 +83,9 @@ public class AdminInitializer implements ApplicationRunner {
         } catch (DuplicateResourceException ex) {
             throw new IllegalStateException(
                     "El usuario '" + username + "' ya existe y no es administrador: elige otro ADMIN_USERNAME", ex);
+        } catch (InvalidRequestException ex) {
+            // p. ej. menos de 72 caracteres pero más de 72 bytes: el mensaje no incluye nunca la contraseña
+            throw new IllegalStateException("ADMIN_PASSWORD no válida: " + ex.getMessage(), ex);
         }
         log.info("Administrador inicial '{}' creado. Ya puedes quitar ADMIN_USERNAME y ADMIN_PASSWORD de la configuración",
                 username);

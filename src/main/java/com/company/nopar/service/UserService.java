@@ -31,6 +31,7 @@ public class UserService {
 
     @Transactional
     public User createUser(String username, String rawPassword, User.Role role) {
+        requireWithinBcryptLimit(rawPassword, "La contraseña");
         if (userRepository.existsByUsername(username)) {
             throw new DuplicateResourceException("Ya existe un usuario con el nombre: " + username);
         }
@@ -65,10 +66,7 @@ public class UserService {
         if (exceedsBcryptLimit(currentPassword) || !passwordEncoder.matches(currentPassword, user.getPassword())) {
             throw new InvalidRequestException("La contraseña actual no es correcta");
         }
-        if (exceedsBcryptLimit(newPassword)) {
-            throw new InvalidRequestException(
-                    "La nueva contraseña no puede superar los 72 bytes en UTF-8 (las letras con tilde y los emojis ocupan más de uno)");
-        }
+        requireWithinBcryptLimit(newPassword, "La nueva contraseña");
         if (newPassword.equals(currentPassword)) {
             throw new InvalidRequestException("La nueva contraseña debe ser distinta de la actual");
         }
@@ -80,7 +78,33 @@ public class UserService {
         return user;
     }
 
+    /**
+     * Restablecimiento por un administrador: asigna una contraseña nueva a un conductor que ha olvidado la suya y
+     * cierra todas sus sesiones. No exige la contraseña actual. Solo vale para conductores: un administrador cambia
+     * la suya con su contraseña actual, y así ninguno puede quedarse en silencio con la cuenta de otro.
+     */
+    @Transactional
+    public void resetDriverPassword(Long userId, String newPassword) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
+        if (user.getRole() != User.Role.DRIVER) {
+            throw new InvalidRequestException("Solo se puede restablecer la contraseña de un conductor");
+        }
+        requireWithinBcryptLimit(newPassword, "La nueva contraseña");
+
+        String newHash = passwordEncoder.encode(newPassword);
+        refreshTokenService.deleteByUser(user.getUsername());
+        user.setPassword(newHash);
+    }
+
     private static boolean exceedsBcryptLimit(String password) {
         return password.getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES;
+    }
+
+    private static void requireWithinBcryptLimit(String password, String what) {
+        if (exceedsBcryptLimit(password)) {
+            throw new InvalidRequestException(what + " no puede superar los " + MAX_PASSWORD_BYTES
+                    + " bytes en UTF-8 (las letras con tilde y los emojis ocupan más de uno)");
+        }
     }
 }

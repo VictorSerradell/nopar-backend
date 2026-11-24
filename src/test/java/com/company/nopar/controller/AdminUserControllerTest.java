@@ -2,6 +2,8 @@ package com.company.nopar.controller;
 
 import com.company.nopar.entity.User;
 import com.company.nopar.exception.DuplicateResourceException;
+import com.company.nopar.exception.InvalidRequestException;
+import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.security.JwtService;
 import com.company.nopar.service.UserService;
 import org.junit.jupiter.api.Test;
@@ -12,8 +14,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -81,5 +86,58 @@ class AdminUserControllerTest {
                         .content(VALID_BODY))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.title").value("Recurso duplicado"));
+    }
+
+    @Test
+    void givenValidPassword_whenResetDriverPassword_thenNoContent() throws Exception {
+        mockMvc.perform(patch("/api/v1/admin/users/10/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"newPassword": "clave-nueva-456"}
+                                """))
+                .andExpect(status().isNoContent());
+
+        verify(userService).resetDriverPassword(10L, "clave-nueva-456");
+    }
+
+    @Test
+    void givenShortPassword_whenResetDriverPassword_thenBadRequestWithFieldError() throws Exception {
+        mockMvc.perform(patch("/api/v1/admin/users/10/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"newPassword": "corta"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.newPassword").value("La nueva contraseña debe tener entre 8 y 72 caracteres"));
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
+    void givenUnknownUser_whenResetDriverPassword_thenNotFound() throws Exception {
+        doThrow(new ResourceNotFoundException("Usuario no encontrado"))
+                .when(userService).resetDriverPassword(99L, "clave-nueva-456");
+
+        mockMvc.perform(patch("/api/v1/admin/users/99/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"newPassword": "clave-nueva-456"}
+                                """))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404));
+    }
+
+    @Test
+    void givenAnAdminAsTarget_whenResetDriverPassword_thenBadRequest() throws Exception {
+        doThrow(new InvalidRequestException("Solo se puede restablecer la contraseña de un conductor"))
+                .when(userService).resetDriverPassword(1L, "clave-nueva-456");
+
+        mockMvc.perform(patch("/api/v1/admin/users/1/password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"newPassword": "clave-nueva-456"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Solo se puede restablecer la contraseña de un conductor"));
     }
 }
