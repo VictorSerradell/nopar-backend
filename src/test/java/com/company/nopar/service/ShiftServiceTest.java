@@ -18,9 +18,11 @@ import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.WaveRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.LocalDate;
@@ -32,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -52,6 +55,9 @@ class ShiftServiceTest {
 
     @Mock
     private VehicleRepository vehicleRepository;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private ShiftService shiftService;
@@ -276,6 +282,45 @@ class ShiftServiceTest {
         assertThat(shift.getVehicle().getId()).isEqualTo(3L);
     }
 
+    @Test
+    void givenAnAssignedShift_whenCreateShift_thenTheDriverIsToldWithTheDayWaveAndVan() {
+        stubWaveDriverAndVan();
+        when(shiftRepository.saveAndFlush(any(ShiftAssignment.class))).thenAnswer(invocation -> {
+            ShiftAssignment saved = invocation.getArgument(0);
+            saved.setId(4L);
+            return saved;
+        });
+
+        shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null);
+
+        ArgumentCaptor<ShiftChangedEvent> captor = ArgumentCaptor.forClass(ShiftChangedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue()).isEqualTo(new ShiftChangedEvent(ShiftChangedEvent.Change.ASSIGNED, 4L, 2L, DAY,
+                "Ola 1", LocalTime.of(9, 30), "1111AAA"));
+    }
+
+    @Test
+    void givenNotifyDriverFalse_whenCreateShift_thenTheShiftIsSavedWithoutTellingAnyone() {
+        stubWaveDriverAndVan();
+        when(shiftRepository.saveAndFlush(any(ShiftAssignment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null, false);
+
+        verify(shiftRepository).saveAndFlush(any(ShiftAssignment.class));
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void givenABusyDriver_whenCreateShift_thenNobodyIsToldBecauseNothingWasSaved() {
+        stubWaveDriverAndVan();
+        when(shiftRepository.existsByWorkDateAndDriverId(DAY, 2L)).thenReturn(true);
+
+        assertThatThrownBy(() -> shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null))
+                .isInstanceOf(DuplicateResourceException.class);
+
+        verifyNoInteractions(eventPublisher);
+    }
+
     // ---------------------------------------------------------------- modificación de turnos
 
     @Test
@@ -419,24 +464,110 @@ class ShiftServiceTest {
         assertThat(updated.getVehicle().getId()).isEqualTo(3L);
     }
 
+    @Test
+    void givenAnotherVan_whenUpdateShift_thenTheSameDriverIsToldItWasModified() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(vehicleRepository.findById(9L)).thenReturn(Optional.of(van(9L, "2222BBB")));
+        when(shiftRepository.saveAndFlush(shift)).thenReturn(shift);
+
+        shiftService.updateShift(4L, new ShiftUpdateRequest(null, null, null, 9L));
+
+        ArgumentCaptor<ShiftChangedEvent> captor = ArgumentCaptor.forClass(ShiftChangedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue()).isEqualTo(new ShiftChangedEvent(ShiftChangedEvent.Change.UPDATED, 4L, 2L, DAY,
+                "Ola 1", LocalTime.of(9, 30), "2222BBB"));
+    }
+
+    @Test
+    void givenAnotherDriver_whenUpdateShift_thenThePreviousOneLosesItAndTheNewOneReceivesIt() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(userRepository.findById(7L)).thenReturn(Optional.of(user(7L, "driver7", User.Role.DRIVER)));
+        when(shiftRepository.saveAndFlush(shift)).thenReturn(shift);
+
+        shiftService.updateShift(4L, new ShiftUpdateRequest(null, null, 7L, null));
+
+        ArgumentCaptor<ShiftChangedEvent> captor = ArgumentCaptor.forClass(ShiftChangedEvent.class);
+        verify(eventPublisher, times(2)).publishEvent(captor.capture());
+        assertThat(captor.getAllValues()).containsExactly(
+                new ShiftChangedEvent(ShiftChangedEvent.Change.CANCELLED, 4L, 2L, DAY, "Ola 1", LocalTime.of(9, 30), "1111AAA"),
+                new ShiftChangedEvent(ShiftChangedEvent.Change.ASSIGNED, 4L, 7L, DAY, "Ola 1", LocalTime.of(9, 30), "1111AAA"));
+    }
+
+    @Test
+    void givenTheSameValues_whenUpdateShift_thenNobodyIsTold() {
+        ShiftAssignment shift = existingShift(4L);
+        stubWaveDriverAndVan();
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(shiftRepository.saveAndFlush(shift)).thenReturn(shift);
+
+        shiftService.updateShift(4L, new ShiftUpdateRequest(DAY, 1L, 2L, 3L));
+
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void givenNotifyDriverFalse_whenUpdateShift_thenTheChangeIsSavedWithoutTellingAnyone() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(userRepository.findById(7L)).thenReturn(Optional.of(user(7L, "driver7", User.Role.DRIVER)));
+        when(shiftRepository.saveAndFlush(shift)).thenReturn(shift);
+
+        ShiftAssignment updated = shiftService.updateShift(4L, new ShiftUpdateRequest(null, null, 7L, null), false);
+
+        assertThat(updated.getDriver().getId()).isEqualTo(7L);
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void givenABusyDay_whenUpdateShift_thenNobodyIsTold() {
+        ShiftAssignment shift = existingShift(4L);
+        LocalDate nextDay = DAY.plusDays(1);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+        when(shiftRepository.existsByWorkDateAndDriverIdAndIdNot(nextDay, 2L, 4L)).thenReturn(true);
+
+        assertThatThrownBy(() -> shiftService.updateShift(4L, new ShiftUpdateRequest(nextDay, null, null, null)))
+                .isInstanceOf(DuplicateResourceException.class);
+
+        verifyNoInteractions(eventPublisher);
+    }
+
     // ---------------------------------------------------------------- baja de turnos
 
     @Test
     void givenUnknownShift_whenDeleteShift_thenNotFound() {
-        when(shiftRepository.existsById(4L)).thenReturn(false);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> shiftService.deleteShift(4L)).isInstanceOf(ResourceNotFoundException.class);
 
-        verify(shiftRepository, never()).deleteById(any());
+        verify(shiftRepository, never()).delete(any());
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test
-    void givenExistingShift_whenDeleteShift_thenDeleted() {
-        when(shiftRepository.existsById(4L)).thenReturn(true);
+    void givenExistingShift_whenDeleteShift_thenDeletedAndTheDriverIsToldItIsCancelled() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
 
         shiftService.deleteShift(4L);
 
-        verify(shiftRepository).deleteById(4L);
+        verify(shiftRepository).delete(shift);
+        ArgumentCaptor<ShiftChangedEvent> captor = ArgumentCaptor.forClass(ShiftChangedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue()).isEqualTo(new ShiftChangedEvent(ShiftChangedEvent.Change.CANCELLED, 4L, 2L, DAY,
+                "Ola 1", LocalTime.of(9, 30), "1111AAA"));
+    }
+
+    @Test
+    void givenNotifyDriverFalse_whenDeleteShift_thenDeletedWithoutTellingAnyone() {
+        ShiftAssignment shift = existingShift(4L);
+        when(shiftRepository.findWithDetailsById(4L)).thenReturn(Optional.of(shift));
+
+        shiftService.deleteShift(4L, false);
+
+        verify(shiftRepository).delete(shift);
+        verifyNoInteractions(eventPublisher);
     }
 
     // ---------------------------------------------------------------- consulta del cuadrante

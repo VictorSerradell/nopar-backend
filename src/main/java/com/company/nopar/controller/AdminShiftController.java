@@ -6,6 +6,7 @@ import com.company.nopar.dto.ShiftUpdateRequest;
 import com.company.nopar.entity.User;
 import com.company.nopar.service.ShiftService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** Bajo /api/v1/admin: SecurityConfig lo reserva al rol ADMIN. */
@@ -28,41 +30,50 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AdminShiftController {
 
+    private static final String NOTIFY_DESCRIPTION =
+            "Si es false, no se avisa por push al conductor (por ejemplo, al montar la semana entera). Por defecto se le avisa";
+
     private final ShiftService shiftService;
 
     @Operation(summary = "Asigna un turno",
-            description = "Conductor y furgoneta de una ola en un día. El usuario tiene que ser DRIVER, ni él ni la furgoneta pueden tener otro turno ese día, y la furgoneta no puede estar en MAINTENANCE ni DAMAGED.")
+            description = "Conductor y furgoneta de una ola en un día. El usuario tiene que ser DRIVER, ni él ni la furgoneta pueden tener otro turno ese día, y la furgoneta no puede estar en MAINTENANCE ni DAMAGED. Avisa por push al conductor (notifyDriver=false lo evita).")
     @ApiResponse(responseCode = "400", description = "Datos no válidos, o el usuario no es un conductor")
     @ApiResponse(responseCode = "404", description = "La ola, el conductor o el vehículo no existen")
     @ApiResponse(responseCode = "409", description = "El conductor o la furgoneta ya tienen un turno ese día, o la furgoneta está en mantenimiento o dañada")
     @PostMapping
     public ResponseEntity<ShiftResponse> createShift(
             @Valid @RequestBody ShiftCreateRequest request,
-            @AuthenticationPrincipal User currentUser
+            @AuthenticationPrincipal User currentUser,
+            @Parameter(description = NOTIFY_DESCRIPTION) @RequestParam(defaultValue = "true") boolean notifyDriver
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ShiftResponse.from(shiftService.createShift(request, currentUser)));
+                .body(ShiftResponse.from(shiftService.createShift(request, currentUser, notifyDriver)));
     }
 
     @Operation(summary = "Modifica un turno",
-            description = "Solo cambian los campos enviados. Hay que enviar al menos uno. Si se cambia de furgoneta, la nueva no puede estar en MAINTENANCE ni DAMAGED.")
+            description = "Solo cambian los campos enviados. Hay que enviar al menos uno. Si se cambia de furgoneta, la nueva no puede estar en MAINTENANCE ni DAMAGED. Avisa por push al conductor si cambia el día, la ola o la furgoneta; si cambia el conductor, avisa al anterior de que lo pierde y al nuevo de que lo recibe (notifyDriver=false lo evita).")
     @ApiResponse(responseCode = "400", description = "No se envió ningún cambio, o el usuario no es un conductor")
     @ApiResponse(responseCode = "404", description = "El turno, la ola, el conductor o el vehículo no existen")
     @ApiResponse(responseCode = "409", description = "El conductor o la furgoneta ya tienen un turno ese día, o la nueva furgoneta está en mantenimiento o dañada")
     @PatchMapping("/{id}")
     public ResponseEntity<ShiftResponse> updateShift(
             @PathVariable Long id,
-            @RequestBody ShiftUpdateRequest request
+            @RequestBody ShiftUpdateRequest request,
+            @Parameter(description = NOTIFY_DESCRIPTION) @RequestParam(defaultValue = "true") boolean notifyDriver
     ) {
-        return ResponseEntity.ok(ShiftResponse.from(shiftService.updateShift(id, request)));
+        return ResponseEntity.ok(ShiftResponse.from(shiftService.updateShift(id, request, notifyDriver)));
     }
 
-    @Operation(summary = "Elimina un turno")
+    @Operation(summary = "Elimina un turno",
+            description = "Avisa por push al conductor de que ya no sale (notifyDriver=false lo evita).")
     @ApiResponse(responseCode = "204", description = "Turno eliminado")
     @ApiResponse(responseCode = "404", description = "El turno no existe")
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteShift(@PathVariable Long id) {
-        shiftService.deleteShift(id);
+    public ResponseEntity<Void> deleteShift(
+            @PathVariable Long id,
+            @Parameter(description = NOTIFY_DESCRIPTION) @RequestParam(defaultValue = "true") boolean notifyDriver
+    ) {
+        shiftService.deleteShift(id, notifyDriver);
         return ResponseEntity.noContent().build();
     }
 }

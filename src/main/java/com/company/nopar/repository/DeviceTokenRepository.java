@@ -55,6 +55,10 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
     @Query("select d.token from DeviceToken d where d.user.role = :role order by d.id")
     List<String> findTokensByUserRole(@Param("role") User.Role role);
 
+    /** Los tokens de todos los dispositivos de un usuario: a quién se envía un aviso personal. */
+    @Query("select d.token from DeviceToken d where d.user.id = :userId order by d.id")
+    List<String> findTokensByUserId(@Param("userId") Long userId);
+
     /** Borra de una sola sentencia estos tokens (los que FCM da por no registrados); devuelve cuántos. */
     @Modifying
     @Query("delete from DeviceToken d where d.token in :tokens")

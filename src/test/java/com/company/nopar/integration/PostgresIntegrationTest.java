@@ -1070,6 +1070,72 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void changingAShiftNotifiesTheDriversInvolvedAndNotifyDriverFalseKeepsItSilent() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        deviceService.registerDevice(ana, "tok-ana-movil", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(ana, "tok-ana-web", DeviceToken.Platform.WEB);
+        deviceService.registerDevice(bea, "tok-bea", DeviceToken.Platform.IOS);
+        Wave wave = saveWave("Ola 1", LocalTime.of(9, 30));
+        Vehicle van1 = saveVehicle("1111AAA", 1000);
+        Vehicle van2 = saveVehicle("2222BBB", 2000);
+        MediaType json = MediaType.APPLICATION_JSON;
+        Set<String> anaTokens = Set.of("tok-ana-movil", "tok-ana-web");
+
+        // Asignar: lo recibe Ana, en todos sus dispositivos y no en los de Bea
+        long shiftId = idOf(mockMvc.perform(post("/api/v1/admin/shifts").with(user(admin)).contentType(json)
+                        .content(shiftBody("2026-11-25", wave.getId(), ana, van1)))
+                .andExpect(status().isCreated()));
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Nuevo turno".equals(notification.title())
+                        && notification.data().equals(Map.of("type", "shift", "change", "assigned",
+                                "workDate", "2026-11-25", "shiftId", String.valueOf(shiftId)))),
+                argThat(tokens -> new HashSet<>(tokens).equals(anaTokens)));
+
+        // Cambiarle la furgoneta: Ana recibe el turno modificado
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)).contentType(json)
+                        .content("{\"vehicleId\": %d}".formatted(van2.getId())))
+                .andExpect(status().isOk());
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Turno modificado".equals(notification.title())
+                        && notification.body().endsWith("furgoneta 2222BBB")),
+                argThat(tokens -> new HashSet<>(tokens).equals(anaTokens)));
+
+        // Pasarlo a Bea: Ana recibe la cancelacion y Bea la asignacion
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)).contentType(json)
+                        .content("{\"driverId\": %d}".formatted(bea.getId())))
+                .andExpect(status().isOk());
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Turno cancelado".equals(notification.title())),
+                argThat(tokens -> new HashSet<>(tokens).equals(anaTokens)));
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Nuevo turno".equals(notification.title())),
+                argThat(tokens -> new HashSet<>(tokens).equals(Set.of("tok-bea"))));
+
+        // Eliminarlo: Bea recibe la cancelacion
+        mockMvc.perform(delete("/api/v1/admin/shifts/{id}", shiftId).with(user(admin)))
+                .andExpect(status().isNoContent());
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Turno cancelado".equals(notification.title())),
+                argThat(tokens -> new HashSet<>(tokens).equals(Set.of("tok-bea"))));
+
+        // En silencio (notifyDriver=false): el turno se crea, se cambia y se elimina y nadie recibe nada
+        long silentId = idOf(mockMvc.perform(post("/api/v1/admin/shifts").param("notifyDriver", "false")
+                        .with(user(admin)).contentType(json)
+                        .content(shiftBody("2026-11-26", wave.getId(), ana, van1)))
+                .andExpect(status().isCreated()));
+        mockMvc.perform(patch("/api/v1/admin/shifts/{id}", silentId).param("notifyDriver", "false")
+                        .with(user(admin)).contentType(json).content("{\"workDate\": \"2026-11-27\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(delete("/api/v1/admin/shifts/{id}", silentId).param("notifyDriver", "false").with(user(admin)))
+                .andExpect(status().isNoContent());
+        verify(pushSender, after(500).never()).send(
+                argThat(notification -> Set.of("2026-11-26", "2026-11-27").contains(notification.data().get("workDate"))),
+                anyCollection());
+    }
+
+    @Test
     void aUserKeepsOnlyTheMostRecentlyRegisteredDevices() throws Exception {
         User ana = saveUser("ana", User.Role.DRIVER);
         int total = DeviceService.MAX_DEVICES_PER_USER + 2;
@@ -1202,10 +1268,11 @@ class PostgresIntegrationTest {
         Wave early = saveWave("Ola 1", LocalTime.of(9, 30));
         Wave late = saveWave("Ola 2", LocalTime.of(11, 0));
         LocalDate day = LocalDate.of(2026, 11, 19);
-        shiftService.createShift(new ShiftCreateRequest(day, late.getId(), ana.getId(), van1.getId()), admin);
-        shiftService.createShift(new ShiftCreateRequest(day, early.getId(), carlos.getId(), van2.getId()), admin);
-        shiftService.createShift(new ShiftCreateRequest(day, early.getId(), bea.getId(), van3.getId()), admin);
-        shiftService.createShift(new ShiftCreateRequest(day.plusDays(1), early.getId(), ana.getId(), van1.getId()), admin);
+        // Sin avisar a nadie (false): el push se envía en segundo plano y sus consultas contarían en las estadísticas
+        shiftService.createShift(new ShiftCreateRequest(day, late.getId(), ana.getId(), van1.getId()), admin, false);
+        shiftService.createShift(new ShiftCreateRequest(day, early.getId(), carlos.getId(), van2.getId()), admin, false);
+        shiftService.createShift(new ShiftCreateRequest(day, early.getId(), bea.getId(), van3.getId()), admin, false);
+        shiftService.createShift(new ShiftCreateRequest(day.plusDays(1), early.getId(), ana.getId(), van1.getId()), admin, false);
 
         Statistics statistics = statistics();
         statistics.clear();
@@ -1368,11 +1435,12 @@ class PostgresIntegrationTest {
     void theBoardIsBuiltOutsideTheTransactionInPinnedThenNewestOrderWithoutNPlusOne() {
         User admin = saveUser("admin1", User.Role.ADMIN);
         User driver = saveUser("driver1", User.Role.DRIVER);
-        Announcement one = announcementService.createAnnouncement(new AnnouncementRequest("Uno", "Texto uno", false, null), admin);
-        announcementService.createAnnouncement(new AnnouncementRequest("Dos", "Texto dos", true, null), admin);
-        announcementService.createAnnouncement(new AnnouncementRequest("Tres", "Texto tres", false, null), admin);
-        announcementService.createAnnouncement(new AnnouncementRequest("Cuatro", "Texto cuatro", false, null), admin);
-        Announcement five = announcementService.createAnnouncement(new AnnouncementRequest("Cinco", "Texto cinco", true, null), admin);
+        // En silencio (notifyDrivers = false): el push va en segundo plano y sus consultas contarían en las estadísticas
+        Announcement one = announcementService.createAnnouncement(new AnnouncementRequest("Uno", "Texto uno", false, false), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Dos", "Texto dos", true, false), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Tres", "Texto tres", false, false), admin);
+        announcementService.createAnnouncement(new AnnouncementRequest("Cuatro", "Texto cuatro", false, false), admin);
+        Announcement five = announcementService.createAnnouncement(new AnnouncementRequest("Cinco", "Texto cinco", true, false), admin);
         announcementService.markAsRead(one.getId(), driver);
         announcementService.markAsRead(five.getId(), driver);
 

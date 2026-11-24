@@ -1,7 +1,10 @@
 package com.company.nopar.push;
 
+import com.company.nopar.service.ShiftChangedEvent;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,5 +62,46 @@ class PushNotificationTest {
     @Test
     void givenNoTitle_whenCreate_thenFails() {
         assertThatThrownBy(() -> new PushNotification(null, "Texto", null)).isInstanceOf(NullPointerException.class);
+    }
+
+    // 25 de noviembre de 2026 es miércoles
+    private static ShiftChangedEvent shiftEvent(ShiftChangedEvent.Change change, Long shiftId) {
+        return new ShiftChangedEvent(change, shiftId, 2L, LocalDate.of(2026, 11, 25), "Ola 1", LocalTime.of(9, 30),
+                "1111AAA");
+    }
+
+    @Test
+    void givenANewShift_whenForShift_thenTheDayWaveAndVanAndTheDataToOpenTheSchedule() {
+        PushNotification notification = PushNotification.forShift(shiftEvent(ShiftChangedEvent.Change.ASSIGNED, 4L));
+
+        assertThat(notification.title()).isEqualTo("Nuevo turno");
+        assertThat(notification.body()).isEqualTo("Miércoles 25 de noviembre · Ola 1 (09:30) · furgoneta 1111AAA");
+        assertThat(notification.data()).isEqualTo(
+                Map.of("type", "shift", "change", "assigned", "workDate", "2026-11-25", "shiftId", "4"));
+    }
+
+    @Test
+    void givenAModifiedShift_whenForShift_thenItSaysSoWithTheNewDetails() {
+        PushNotification notification = PushNotification.forShift(shiftEvent(ShiftChangedEvent.Change.UPDATED, 4L));
+
+        assertThat(notification.title()).isEqualTo("Turno modificado");
+        assertThat(notification.body()).isEqualTo("Miércoles 25 de noviembre · Ola 1 (09:30) · furgoneta 1111AAA");
+        assertThat(notification.data()).containsEntry("change", "updated");
+    }
+
+    @Test
+    void givenACancelledShift_whenForShift_thenItNamesTheDayAndWaveButNotTheVan() {
+        PushNotification notification = PushNotification.forShift(shiftEvent(ShiftChangedEvent.Change.CANCELLED, 4L));
+
+        assertThat(notification.title()).isEqualTo("Turno cancelado");
+        assertThat(notification.body()).isEqualTo("Miércoles 25 de noviembre · Ola 1 (09:30)");
+        assertThat(notification.data()).containsEntry("change", "cancelled");
+    }
+
+    @Test
+    void givenNoShiftId_whenForShift_thenTheDataOmitsIt() {
+        PushNotification notification = PushNotification.forShift(shiftEvent(ShiftChangedEvent.Change.ASSIGNED, null));
+
+        assertThat(notification.data()).doesNotContainKey("shiftId").containsEntry("type", "shift");
     }
 }

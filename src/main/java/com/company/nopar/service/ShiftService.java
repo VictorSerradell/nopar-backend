@@ -17,6 +17,7 @@ import com.company.nopar.repository.UserRepository;
 import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.WaveRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +30,9 @@ import java.util.List;
  * Cuadrantes: las olas (franjas de salida) y qué conductor sale en cada una, con qué furgoneta, cada día.
  * Un conductor y una furgoneta solo pueden estar en un turno al día, y una furgoneta en mantenimiento o dañada
  * no se puede asignar a ningún turno (409).
+ *
+ * Al asignar, cambiar o quitar un turno se avisa por push al conductor afectado (al anterior también, si el turno
+ * pasa a otro), salvo que el administrador pida hacerlo en silencio.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,6 +47,7 @@ public class ShiftService {
     private final ShiftAssignmentRepository shiftRepository;
     private final UserRepository userRepository;
     private final VehicleRepository vehicleRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ---------------------------------------------------------------- olas
 
@@ -82,8 +87,15 @@ public class ShiftService {
 
     // ---------------------------------------------------------------- turnos
 
+    /** Asigna el turno y avisa por push al conductor. */
     @Transactional
     public ShiftAssignment createShift(ShiftCreateRequest request, User actor) {
+        return createShift(request, actor, true);
+    }
+
+    /** Con notifyDriver = false el turno se asigna sin avisar al conductor (por ejemplo, al montar la semana entera). */
+    @Transactional
+    public ShiftAssignment createShift(ShiftCreateRequest request, User actor, boolean notifyDriver) {
         Wave wave = findWave(request.waveId());
         User driver = findDriver(request.driverId());
         Vehicle vehicle = findVehicle(request.vehicleId());
@@ -96,7 +108,11 @@ public class ShiftService {
         shift.setDriver(driver);
         shift.setVehicle(vehicle);
         shift.setCreatedBy(actor);
-        return saveOrConflict(shift);
+        ShiftAssignment saved = saveOrConflict(shift);
+        if (notifyDriver) {
+            eventPublisher.publishEvent(ShiftChangedEvent.of(ShiftChangedEvent.Change.ASSIGNED, saved));
+        }
+        return saved;
     }
 
     /**
@@ -107,6 +123,12 @@ public class ShiftService {
      */
     @Transactional
     public ShiftAssignment updateShift(Long id, ShiftUpdateRequest request) {
+        return updateShift(id, request, true);
+    }
+
+    /** Con notifyDriver = false el cambio se guarda sin avisar a nadie. */
+    @Transactional
+    public ShiftAssignment updateShift(Long id, ShiftUpdateRequest request, boolean notifyDriver) {
         if (request.isEmpty()) {
             throw new InvalidRequestException("No se ha indicado ningún cambio");
         }
@@ -125,19 +147,49 @@ public class ShiftService {
         }
         ensureFree(workDate, driver.getId(), vehicle.getId(), id);
 
+        // Qué avisar, calculado antes de tocar la entidad: si cambia el conductor, el anterior recibe la cancelación
+        // (con los datos que tenía el turno) y el nuevo la asignación; si el conductor es el mismo y cambia el día, la
+        // ola o la furgoneta, recibe la modificación; si no cambia nada, nadie recibe nada
+        boolean sameDriver = driver.getId().equals(shift.getDriver().getId());
+        boolean sameSlot = workDate.equals(shift.getWorkDate())
+                && wave.getId().equals(shift.getWave().getId())
+                && vehicle.getId().equals(shift.getVehicle().getId());
+        ShiftChangedEvent cancelledForPreviousDriver = notifyDriver && !sameDriver
+                ? ShiftChangedEvent.of(ShiftChangedEvent.Change.CANCELLED, shift)
+                : null;
+
         shift.setWorkDate(workDate);
         shift.setWave(wave);
         shift.setDriver(driver);
         shift.setVehicle(vehicle);
-        return saveOrConflict(shift);
+        ShiftAssignment saved = saveOrConflict(shift);
+
+        if (cancelledForPreviousDriver != null) {
+            eventPublisher.publishEvent(cancelledForPreviousDriver);
+            eventPublisher.publishEvent(ShiftChangedEvent.of(ShiftChangedEvent.Change.ASSIGNED, saved));
+        } else if (notifyDriver && !sameSlot) {
+            eventPublisher.publishEvent(ShiftChangedEvent.of(ShiftChangedEvent.Change.UPDATED, saved));
+        }
+        return saved;
     }
 
+    /** Elimina el turno y avisa por push al conductor de que ya no sale. */
     @Transactional
     public void deleteShift(Long id) {
-        if (!shiftRepository.existsById(id)) {
-            throw new ResourceNotFoundException("Turno no encontrado con ID: " + id);
+        deleteShift(id, true);
+    }
+
+    /** Con notifyDriver = false el turno se elimina sin avisar al conductor. */
+    @Transactional
+    public void deleteShift(Long id, boolean notifyDriver) {
+        // Se carga con sus relaciones: el aviso necesita el día, la ola y la furgoneta que tenía
+        ShiftAssignment shift = shiftRepository.findWithDetailsById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Turno no encontrado con ID: " + id));
+        ShiftChangedEvent cancelled = ShiftChangedEvent.of(ShiftChangedEvent.Change.CANCELLED, shift);
+        shiftRepository.delete(shift);
+        if (notifyDriver) {
+            eventPublisher.publishEvent(cancelled);
         }
-        shiftRepository.deleteById(id);
     }
 
     /** El cuadrante completo de un rango de fechas: todos los turnos, como la tabla de olas que se comparte hoy. */

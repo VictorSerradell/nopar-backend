@@ -12,6 +12,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -71,5 +73,26 @@ class PushServiceTest {
         assertThatThrownBy(() -> pushService.notifyDrivers(notification)).isInstanceOf(IllegalStateException.class);
 
         verifyNoInteractions(deviceService);
+    }
+
+    @Test
+    void givenNoDevices_whenNotifyUser_thenNothingIsSent() {
+        when(deviceTokenRepository.findTokensByUserId(7L)).thenReturn(List.of());
+
+        pushService.notifyUser(7L, notification);
+
+        verifyNoInteractions(pushSender, deviceService);
+    }
+
+    @Test
+    void givenTheUsersDevices_whenNotifyUser_thenSendsOnlyToThoseAndRemovesTheUnregisteredOnes() {
+        when(deviceTokenRepository.findTokensByUserId(7L)).thenReturn(List.of("tok-1", "tok-2"));
+        when(pushSender.send(notification, List.of("tok-1", "tok-2"))).thenReturn(List.of("tok-2"));
+
+        pushService.notifyUser(7L, notification);
+
+        verify(pushSender).send(notification, List.of("tok-1", "tok-2"));
+        verify(deviceService).removeInvalidTokens(List.of("tok-2"));
+        verify(deviceTokenRepository, never()).findTokensByUserRole(any());
     }
 }

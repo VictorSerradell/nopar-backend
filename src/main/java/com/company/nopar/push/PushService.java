@@ -9,8 +9,8 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * Envía una notificación a los dispositivos de los conductores y borra los tokens que el proveedor da por no
- * registrados. A propósito no es transaccional: no se retiene una conexión de la base de datos mientras se espera a
+ * Envía una notificación a los dispositivos de los conductores, o de uno solo, y borra los tokens que el proveedor
+ * da por no registrados. A propósito no es transaccional: no se retiene una conexión de la base de datos mientras se espera a
  * la red.
  */
 @Service
@@ -21,8 +21,17 @@ public class PushService {
     private final DeviceService deviceService;
     private final PushSender pushSender;
 
+    /** A todos los conductores (un aviso general). */
     public void notifyDrivers(PushNotification notification) {
-        List<String> tokens = deviceTokenRepository.findTokensByUserRole(User.Role.DRIVER);
+        send(notification, deviceTokenRepository.findTokensByUserRole(User.Role.DRIVER));
+    }
+
+    /** A todos los dispositivos de un usuario (algo que le concierne solo a él, como su turno). */
+    public void notifyUser(Long userId, PushNotification notification) {
+        send(notification, deviceTokenRepository.findTokensByUserId(userId));
+    }
+
+    private void send(PushNotification notification, List<String> tokens) {
         if (tokens.isEmpty()) {
             return;
         }

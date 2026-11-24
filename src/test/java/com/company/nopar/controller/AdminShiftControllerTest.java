@@ -25,6 +25,7 @@ import java.time.LocalTime;
 
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -57,7 +58,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenValidRequest_whenCreateShift_thenCreatedWithThePublicView() throws Exception {
-        when(shiftService.createShift(any(), any())).thenReturn(shift(4L));
+        when(shiftService.createShift(any(), any(), anyBoolean())).thenReturn(shift(4L));
 
         mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
                 .andExpect(status().isCreated())
@@ -70,7 +71,7 @@ class AdminShiftControllerTest {
                 .andExpect(jsonPath("$.driver").doesNotExist())
                 .andExpect(jsonPath("$..password").isEmpty());
 
-        verify(shiftService).createShift(eq(new ShiftCreateRequest(LocalDate.of(2026, 11, 19), 1L, 2L, 3L)), any());
+        verify(shiftService).createShift(eq(new ShiftCreateRequest(LocalDate.of(2026, 11, 19), 1L, 2L, 3L)), any(), eq(true));
     }
 
     @Test
@@ -99,7 +100,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenUnknownWaveDriverOrVehicle_whenCreateShift_thenNotFound() throws Exception {
-        when(shiftService.createShift(any(), any()))
+        when(shiftService.createShift(any(), any(), anyBoolean()))
                 .thenThrow(new ResourceNotFoundException("Ola no encontrada con ID: 1"));
 
         mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
@@ -109,7 +110,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenAUserWhoIsNotADriver_whenCreateShift_thenBadRequestWithTheReason() throws Exception {
-        when(shiftService.createShift(any(), any()))
+        when(shiftService.createShift(any(), any(), anyBoolean()))
                 .thenThrow(new InvalidRequestException("El usuario admin1 no es un conductor"));
 
         mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
@@ -120,7 +121,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenDriverOrVehicleAlreadyAssigned_whenCreateShift_thenConflict() throws Exception {
-        when(shiftService.createShift(any(), any()))
+        when(shiftService.createShift(any(), any(), anyBoolean()))
                 .thenThrow(new DuplicateResourceException("El conductor o la furgoneta ya tienen un turno ese día"));
 
         mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
@@ -130,7 +131,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenVehicleOutOfService_whenCreateShift_thenConflictWithTheReason() throws Exception {
-        when(shiftService.createShift(any(), any())).thenThrow(new InvalidStateException(
+        when(shiftService.createShift(any(), any(), anyBoolean())).thenThrow(new InvalidStateException(
                 "El vehículo 1111AAA está en mantenimiento y no se puede asignar a un turno hasta que un administrador cambie su estado"));
 
         mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
@@ -141,7 +142,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenSomeFields_whenUpdateShift_thenTheServiceReceivesOnlyThose() throws Exception {
-        when(shiftService.updateShift(eq(4L), any())).thenReturn(shift(4L));
+        when(shiftService.updateShift(eq(4L), any(), anyBoolean())).thenReturn(shift(4L));
 
         mockMvc.perform(patch(URL + "/4").contentType(MediaType.APPLICATION_JSON).content("""
                         {"vehicleId": 9}
@@ -149,12 +150,12 @@ class AdminShiftControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(4));
 
-        verify(shiftService).updateShift(eq(4L), eq(new ShiftUpdateRequest(null, null, null, 9L)));
+        verify(shiftService).updateShift(eq(4L), eq(new ShiftUpdateRequest(null, null, null, 9L)), eq(true));
     }
 
     @Test
     void givenNoChanges_whenUpdateShift_thenBadRequest() throws Exception {
-        when(shiftService.updateShift(eq(4L), any()))
+        when(shiftService.updateShift(eq(4L), any(), anyBoolean()))
                 .thenThrow(new InvalidRequestException("No se ha indicado ningún cambio"));
 
         mockMvc.perform(patch(URL + "/4").contentType(MediaType.APPLICATION_JSON).content("{}"))
@@ -164,7 +165,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenBusyDriverOrVehicle_whenUpdateShift_thenConflict() throws Exception {
-        when(shiftService.updateShift(eq(4L), any()))
+        when(shiftService.updateShift(eq(4L), any(), anyBoolean()))
                 .thenThrow(new DuplicateResourceException("El conductor o la furgoneta ya tienen un turno ese día"));
 
         mockMvc.perform(patch(URL + "/4").contentType(MediaType.APPLICATION_JSON).content("""
@@ -175,7 +176,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenVehicleOutOfService_whenUpdateShift_thenConflictWithTheReason() throws Exception {
-        when(shiftService.updateShift(eq(4L), any())).thenThrow(new InvalidStateException(
+        when(shiftService.updateShift(eq(4L), any(), anyBoolean())).thenThrow(new InvalidStateException(
                 "El vehículo 2222BBB está dañado y no se puede asignar a un turno hasta que un administrador cambie su estado"));
 
         mockMvc.perform(patch(URL + "/4").contentType(MediaType.APPLICATION_JSON).content("""
@@ -188,7 +189,7 @@ class AdminShiftControllerTest {
 
     @Test
     void givenUnknownShift_whenUpdateShift_thenNotFound() throws Exception {
-        when(shiftService.updateShift(eq(9L), any()))
+        when(shiftService.updateShift(eq(9L), any(), anyBoolean()))
                 .thenThrow(new ResourceNotFoundException("Turno no encontrado con ID: 9"));
 
         mockMvc.perform(patch(URL + "/9").contentType(MediaType.APPLICATION_JSON).content("""
@@ -202,16 +203,45 @@ class AdminShiftControllerTest {
         mockMvc.perform(delete(URL + "/4"))
                 .andExpect(status().isNoContent());
 
-        verify(shiftService).deleteShift(4L);
+        verify(shiftService).deleteShift(4L, true);
     }
 
     @Test
     void givenUnknownShift_whenDeleteShift_thenNotFound() throws Exception {
-        doThrow(new ResourceNotFoundException("Turno no encontrado con ID: 9")).when(shiftService).deleteShift(9L);
+        doThrow(new ResourceNotFoundException("Turno no encontrado con ID: 9")).when(shiftService).deleteShift(9L, true);
 
         mockMvc.perform(delete(URL + "/9"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.title").value("Recurso no encontrado"));
+    }
+
+    @Test
+    void givenNotifyDriverFalse_whenCreateShift_thenTheServiceIsToldNotToNotify() throws Exception {
+        when(shiftService.createShift(any(), any(), anyBoolean())).thenReturn(shift(4L));
+
+        mockMvc.perform(post(URL).param("notifyDriver", "false").contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
+                .andExpect(status().isCreated());
+
+        verify(shiftService).createShift(any(), any(), eq(false));
+    }
+
+    @Test
+    void givenNotifyDriverFalse_whenUpdateShift_thenTheServiceIsToldNotToNotify() throws Exception {
+        when(shiftService.updateShift(eq(4L), any(), anyBoolean())).thenReturn(shift(4L));
+
+        mockMvc.perform(patch(URL + "/4").param("notifyDriver", "false").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"vehicleId\": 9}"))
+                .andExpect(status().isOk());
+
+        verify(shiftService).updateShift(eq(4L), any(), eq(false));
+    }
+
+    @Test
+    void givenNotifyDriverFalse_whenDeleteShift_thenTheServiceIsToldNotToNotify() throws Exception {
+        mockMvc.perform(delete(URL + "/4").param("notifyDriver", "false"))
+                .andExpect(status().isNoContent());
+
+        verify(shiftService).deleteShift(4L, false);
     }
 
     private static ShiftAssignment shift(Long id) {
