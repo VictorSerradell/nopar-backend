@@ -39,6 +39,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       OPENAPI_ENABLED: ${OPENAPI_ENABLED:-true}
+      SHOW_SQL: ${SHOW_SQL:-false}
     volumes:
       - uploads:/data/uploads
 

@@ -22,7 +22,9 @@ spring:
     # Sin sesión abierta durante el render de la respuesta: toda lectura de relaciones perezosas
     # ocurre dentro del servicio (transacción) o se trae con @EntityGraph
     open-in-view: false
-    show-sql: true
+    # Imprime en el log cada sentencia SQL: útil para depurar en local, ruidoso (y con datos) en producción.
+    # SHOW_SQL=true/false lo cambia en cualquier entorno; docker-compose lo desactiva por defecto
+    show-sql: ${SHOW_SQL:true}
     properties:
       hibernate:
         format_sql: true
