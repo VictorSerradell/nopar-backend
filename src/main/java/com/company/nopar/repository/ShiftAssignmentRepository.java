@@ -59,6 +59,13 @@ public interface ShiftAssignmentRepository extends JpaRepository<ShiftAssignment
             """)
     List<ShiftAssignment> findByWorkDateAndWaveId(@Param("date") LocalDate date, @Param("waveId") Long waveId);
 
+    /** Los ids de los conductores con turno en una ola un día, sin traer los turnos: a quién avisa el chat de la ola. */
+    @Query("select s.driver.id from ShiftAssignment s where s.workDate = :date and s.wave.id = :waveId")
+    List<Long> findDriverIdsByWorkDateAndWaveId(@Param("date") LocalDate date, @Param("waveId") Long waveId);
+
+    /** Si el conductor tiene turno en esa ola ese día: lo que le da acceso al chat de la ola. */
+    boolean existsByWorkDateAndDriverIdAndWaveId(LocalDate workDate, Long driverId, Long waveId);
+
     /** El turno de un conductor un día (a lo sumo uno: lo garantiza la restricción única). Sin traer sus relaciones. */
     Optional<ShiftAssignment> findByWorkDateAndDriverId(LocalDate workDate, Long driverId);
 

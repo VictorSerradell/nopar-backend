@@ -3,8 +3,11 @@ package com.company.nopar.repository;
 import com.company.nopar.entity.User;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,4 +21,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     /** Los usuarios de un rol, en el orden que pida quien llama (por ejemplo, por nombre). */
     List<User> findByRole(User.Role role, Sort sort);
+
+    /** Solo los ids de los usuarios de esos roles: a quién avisa el chat de una ola además de a sus conductores. */
+    @Query("select u.id from User u where u.role in :roles")
+    List<Long> findIdsByRoleIn(@Param("roles") Collection<User.Role> roles);
 }

@@ -29,11 +29,11 @@ public class DeviceController {
     private final DeviceService deviceService;
 
     @Operation(summary = "Registra el dispositivo para recibir notificaciones push",
-            description = "La app envía el token de Firebase Cloud Messaging y su plataforma (ANDROID, IOS o WEB) después de iniciar sesión, y otra vez cuando FCM renueva el token. Es idempotente. Si el token era de otro usuario, pasa al usuario autenticado. Cada usuario conserva como máximo 10 dispositivos: al registrar más se descartan los menos recientes.")
+            description = "La app envía el token de Firebase Cloud Messaging y su plataforma (ANDROID, IOS o WEB) después de iniciar sesión, y otra vez cuando FCM renueva el token. Es idempotente. Si el token era de otro usuario, pasa al usuario autenticado. Cada usuario conserva como máximo 10 dispositivos: al registrar más se descartan los menos recientes. Lo hacen conductores, encargados y administradores: los encargados solo reciben los mensajes del chat de las olas.")
     @ApiResponse(responseCode = "204", description = "Dispositivo registrado")
     @ApiResponse(responseCode = "400", description = "Token vacío o demasiado largo, o plataforma no válida")
     @PostMapping
-    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('DRIVER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Void> registerDevice(
             @Valid @RequestBody DeviceRegistrationRequest request,
             @AuthenticationPrincipal User currentUser // el usuario sale del token JWT, no lo envía el cliente
@@ -47,7 +47,7 @@ public class DeviceController {
     @ApiResponse(responseCode = "204", description = "Dispositivo dado de baja")
     @ApiResponse(responseCode = "400", description = "Falta el token")
     @DeleteMapping
-    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('DRIVER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Void> unregisterDevice(
             @RequestParam
             @NotBlank(message = "El token del dispositivo es obligatorio")

@@ -2,6 +2,7 @@ package com.company.nopar.push;
 
 import com.company.nopar.service.ShiftChangedEvent;
 import com.company.nopar.service.WaveCalledEvent;
+import com.company.nopar.service.WaveChatMessageEvent;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
@@ -126,6 +127,42 @@ class PushNotificationTest {
                 7L, 1L, "Ola 1", LocalDate.of(2026, 11, 24), "Subid", List.of(2L));
 
         assertThat(PushNotification.forWaveCall(event).androidChannelId()).isEqualTo("nopar_wave_calls");
+    }
+
+    @Test
+    void givenATextMessage_whenForChatMessage_thenTheWaveIsTheTitleAndTheBodySaysWhoWrote() {
+        PushNotification notification = PushNotification.forChatMessage(chatEvent("Llego en 5 minutos", false));
+
+        assertThat(notification.title()).isEqualTo("Ola 1");
+        assertThat(notification.body()).isEqualTo("ana: Llego en 5 minutos");
+        assertThat(notification.data()).isEqualTo(
+                Map.of("type", "chat", "waveId", "1", "waveName", "Ola 1", "workDate", "2026-11-24", "messageId", "9"));
+    }
+
+    @Test
+    void givenAPhotoMessage_whenForChatMessage_thenTheBodyMentionsThePhoto() {
+        assertThat(PushNotification.forChatMessage(chatEvent(null, true)).body()).isEqualTo("ana: 📷 Foto");
+        assertThat(PushNotification.forChatMessage(chatEvent("  ", true)).body()).isEqualTo("ana: 📷 Foto");
+        assertThat(PushNotification.forChatMessage(chatEvent("Mirad este golpe", true)).body())
+                .isEqualTo("ana: 📷 Mirad este golpe");
+    }
+
+    @Test
+    void givenALongMessage_whenForChatMessage_thenTheBodyIsOneLineCutAtTheLimit() {
+        String body = PushNotification.forChatMessage(chatEvent("línea uno\n" + "x".repeat(500), false)).body();
+
+        assertThat(body).doesNotContain("\n").endsWith("…");
+        assertThat(body.codePointCount(0, body.length())).isEqualTo(PushNotification.MAX_BODY_CHARS);
+    }
+
+    @Test
+    void givenAChatMessage_whenAndroidChannelId_thenNoneSoItSoundsInTheDefaultChannel() {
+        assertThat(PushNotification.forChatMessage(chatEvent("hola", false)).androidChannelId()).isNull();
+    }
+
+    private static WaveChatMessageEvent chatEvent(String text, boolean hasPhoto) {
+        return new WaveChatMessageEvent(
+                9L, 1L, "Ola 1", LocalDate.of(2026, 11, 24), "ana", text, hasPhoto, List.of(3L));
     }
 
     @Test

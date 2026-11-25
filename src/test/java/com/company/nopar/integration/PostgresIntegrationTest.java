@@ -20,6 +20,7 @@ import com.company.nopar.entity.Vehicle;
 import com.company.nopar.entity.VehicleInspection;
 import com.company.nopar.entity.VehicleReturn;
 import com.company.nopar.entity.Wave;
+import com.company.nopar.entity.WaveMessage;
 import com.company.nopar.exception.InvalidKilometersException;
 import com.company.nopar.exception.InvalidRefreshTokenException;
 import com.company.nopar.exception.InvalidStateException;
@@ -35,6 +36,7 @@ import com.company.nopar.repository.VehicleInspectionRepository;
 import com.company.nopar.repository.VehicleRepository;
 import com.company.nopar.repository.VehicleReturnRepository;
 import com.company.nopar.repository.WaveCallRepository;
+import com.company.nopar.repository.WaveMessageRepository;
 import com.company.nopar.repository.WaveRepository;
 import com.company.nopar.service.AnnouncementService;
 import com.company.nopar.service.DeviceService;
@@ -105,6 +107,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -116,7 +119,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V10) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V11) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -181,6 +184,8 @@ class PostgresIntegrationTest {
     @Autowired
     private WaveCallRepository waveCallRepository;
     @Autowired
+    private WaveMessageRepository waveMessageRepository;
+    @Autowired
     private AnnouncementService announcementService;
     @Autowired
     private AnnouncementRepository announcementRepository;
@@ -216,6 +221,8 @@ class PostgresIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
+        // Los mensajes del chat apuntan a olas y usuarios
+        waveMessageRepository.deleteAllInBatch();
         // Las llamadas de ola apuntan a olas y usuarios; sus destinatarios se borran con ellas (on delete cascade)
         waveCallRepository.deleteAllInBatch();
         // Los turnos apuntan a olas, conductores y furgonetas: se borran antes que ellos
@@ -253,7 +260,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -269,7 +276,8 @@ class PostgresIntegrationTest {
                 "idx_announcements_board",
                 "idx_announcement_reads_user",
                 "idx_wave_calls_work_date",
-                "idx_wave_call_recipients_driver");
+                "idx_wave_call_recipients_driver",
+                "idx_wave_messages_chat");
         assertThat(uniques).contains(
                 "uk_waves_name",
                 "uk_shift_assignments_driver_day",
@@ -277,6 +285,22 @@ class PostgresIntegrationTest {
                 "uk_announcement_reads_announcement_user",
                 "uk_device_tokens_token",
                 "uk_wave_call_recipients_call_driver");
+    }
+
+    @Test
+    void aChatMessageCannotBeEmptyInTheDatabase() {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        Wave wave = saveWave("Ola 1", LocalTime.of(9, 30));
+        String insert = "insert into wave_messages (wave_id, work_date, sender_id, body, photo_file, sent_at) "
+                + "values (?, current_date, ?, ?, ?, now())";
+
+        assertThatThrownBy(() -> jdbc.update(insert, wave.getId(), ana.getId(), null, null))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        // Con texto, con foto o con las dos cosas sí vale
+        assertThat(jdbc.update(insert, wave.getId(), ana.getId(), "hola", null)).isEqualTo(1);
+        assertThat(jdbc.update(insert, wave.getId(), ana.getId(), null, "abc.jpg")).isEqualTo(1);
+        assertThat(jdbc.update(insert, wave.getId(), ana.getId(), "hola", "abc.jpg")).isEqualTo(1);
     }
 
     // ------------------------------------------------------------------ listados paginados
@@ -689,6 +713,13 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/dispatch/shifts'].post").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/dispatch/shifts/{id}'].patch").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/dispatch/shifts/{id}'].delete").exists())
+                // chat de cada ola: leer desde un mensaje, escribir texto (JSON) o foto (multipart) y descargar la foto
+                .andExpect(jsonPath("$.paths['/api/v1/waves/{waveId}/chat/messages'].get.parameters[?(@.name == 'after')]").isNotEmpty())
+                .andExpect(jsonPath("$.paths['/api/v1/waves/{waveId}/chat/messages'].post.requestBody.content['application/json']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/waves/{waveId}/chat/photos'].post.requestBody.content['multipart/form-data']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/waves/{waveId}/chat/messages/{messageId}/photo'].get.responses['200'].content['image/jpeg']").exists())
+                .andExpect(jsonPath("$.components.schemas.WaveMessageResponse.properties.photoUrl").exists())
+                .andExpect(jsonPath("$.components.schemas.WaveMessageResponse.properties.senderRole").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.acknowledged").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.canAcknowledge").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
@@ -1240,6 +1271,17 @@ class PostgresIntegrationTest {
                         """))
                 .andExpect(status().isNoContent());
         assertThat(deviceTokenRepository.countByUserId(admin.getId())).isEqualTo(1);
+
+        // Los encargados tambien: reciben los mensajes del chat de las olas
+        User manager = saveUser("encargado1", User.Role.MANAGER);
+        mockMvc.perform(post("/api/v1/devices").with(user(manager)).contentType(json).content("""
+                        {"token": "tok-encargado", "platform": "ANDROID"}
+                        """))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.countByUserId(manager.getId())).isEqualTo(1);
+        mockMvc.perform(delete("/api/v1/devices").param("token", "tok-encargado").with(user(manager)))
+                .andExpect(status().isNoContent());
+        assertThat(deviceTokenRepository.countByUserId(manager.getId())).isZero();
     }
 
     @Test
@@ -1353,6 +1395,152 @@ class PostgresIntegrationTest {
         verify(pushSender, after(500).never()).send(
                 argThat(notification -> Set.of("2026-11-26", "2026-11-27").contains(notification.data().get("workDate"))),
                 anyCollection());
+    }
+
+    @Test
+    void theWaveChatIsOnlyForItsDriversTodayAndTheStaffAndItNotifiesTheOtherMembers() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User manager = saveUser("encargado1", User.Role.MANAGER);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User cris = saveUser("cris", User.Role.DRIVER);
+        User dani = saveUser("dani", User.Role.DRIVER);
+        for (User member : List.of(admin, manager, ana, bea, cris, dani)) {
+            deviceService.registerDevice(member, "tok-" + member.getUsername(), DeviceToken.Platform.ANDROID);
+        }
+        Wave wave1 = saveWave("Ola 1", LocalTime.of(9, 30));
+        Wave wave2 = saveWave("Ola 2", LocalTime.of(10, 30));
+        LocalDate today = LocalDate.now();
+        shiftAssignmentRepository.save(shift(today, wave1, ana, saveVehicle("1111AAA", 1000), admin));
+        shiftAssignmentRepository.save(shift(today, wave1, bea, saveVehicle("2222BBB", 2000), admin));
+        shiftAssignmentRepository.save(shift(today, wave2, cris, saveVehicle("3333CCC", 3000), admin));
+        // Dani sale en la Ola 1, pero mañana: hoy no es del chat
+        shiftAssignmentRepository.save(shift(today.plusDays(1), wave1, dani, saveVehicle("4444DDD", 4000), admin));
+        MediaType json = MediaType.APPLICATION_JSON;
+        String messages = "/api/v1/waves/{id}/chat/messages";
+        String photos = "/api/v1/waves/{id}/chat/photos";
+        long id1 = wave1.getId();
+        long id2 = wave2.getId();
+
+        // Quien hoy no trabaja en la ola no entra: ni lee ni escribe. Sin token, tampoco. Una ola que no existe, 404
+        mockMvc.perform(get(messages, id1).with(user(cris))).andExpect(status().isForbidden());
+        mockMvc.perform(get(messages, id1).with(user(dani))).andExpect(status().isForbidden());
+        mockMvc.perform(post(messages, id1).with(user(cris)).contentType(json).content("{\"text\": \"hola\"}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(messages, id1)).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(messages, id1 + 1000).with(user(ana))).andExpect(status().isNotFound());
+        mockMvc.perform(get(messages, id1).with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        // Ana escribe (con espacios de más): queda recortado y firmado por ella
+        long first = idOf(mockMvc.perform(post(messages, id1).with(user(ana)).contentType(json)
+                        .content("{\"text\": \"  Llego en 5 minutos  \"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.text").value("Llego en 5 minutos"))
+                .andExpect(jsonPath("$.senderUsername").value("ana"))
+                .andExpect(jsonPath("$.senderRole").value("DRIVER"))
+                .andExpect(jsonPath("$.waveId").value(id1))
+                .andExpect(jsonPath("$.photoUrl").doesNotExist()));
+
+        // Se avisa a los demás de la ola y al personal (Bea, el encargado y el administrador), no a ella ni a otras olas
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "Ola 1".equals(notification.title())
+                        && "ana: Llego en 5 minutos".equals(notification.body())
+                        && notification.data().equals(Map.of("type", "chat", "waveId", String.valueOf(id1),
+                                "waveName", "Ola 1", "workDate", today.toString(), "messageId", String.valueOf(first)))),
+                argThat(tokens -> new HashSet<>(tokens).equals(Set.of("tok-bea", "tok-encargado1", "tok-admin1"))));
+
+        // Bea responde con una foto y un texto; el encargado, solo con una foto
+        ResultActions photoMessage = mockMvc.perform(multipart(photos, id1)
+                        .file(new MockMultipartFile("photo", "golpe.jpg", "image/jpeg", JPEG))
+                        .file(new MockMultipartFile("data", "", MediaType.APPLICATION_JSON_VALUE,
+                                "{\"text\": \"Mirad este golpe\"}".getBytes(StandardCharsets.UTF_8)))
+                        .with(user(bea)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.text").value("Mirad este golpe"));
+        long withPhoto = idOf(photoMessage);
+        // La respuesta dice dónde descargar la foto: la misma ruta que atiende el controlador
+        assertThat(field(photoMessage, "photoUrl"))
+                .isEqualTo("/api/v1/waves/" + id1 + "/chat/messages/" + withPhoto + "/photo");
+        long onlyPhoto = idOf(mockMvc.perform(multipart(photos, id1)
+                        .file(new MockMultipartFile("photo", "otra.jpg", "image/jpeg", JPEG))
+                        .with(user(manager)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.text").doesNotExist())
+                .andExpect(jsonPath("$.photoUrl").exists()));
+        verify(pushSender, timeout(5000)).send(
+                argThat(notification -> "encargado1: 📷 Foto".equals(notification.body())),
+                argThat(tokens -> new HashSet<>(tokens).equals(Set.of("tok-ana", "tok-bea", "tok-admin1"))));
+
+        // Mensajes vacíos, demasiado largos o con un archivo que no es una imagen: 400 y no queda nada guardado
+        mockMvc.perform(post(messages, id1).with(user(ana)).contentType(json).content("{\"text\": \"   \"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post(messages, id1).with(user(ana)).contentType(json)
+                        .content("{\"text\": \"" + "a".repeat(1001) + "\"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(multipart(photos, id1)
+                        .file(new MockMultipartFile("photo", "x.jpg", "image/jpeg", new byte[]{1, 2, 3}))
+                        .with(user(ana)))
+                .andExpect(status().isBadRequest());
+
+        // Un mensaje de ayer en la misma ola no aparece en el chat de hoy
+        WaveMessage yesterday = new WaveMessage();
+        yesterday.setWaveId(id1);
+        yesterday.setWorkDate(today.minusDays(1));
+        yesterday.setSender(ana);
+        yesterday.setBody("de ayer");
+        waveMessageRepository.save(yesterday);
+
+        // Ana lee el chat entero en orden de llegada, con el autor de cada mensaje sin consultas perezosas
+        mockMvc.perform(get(messages, id1).with(user(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].id").value(first))
+                .andExpect(jsonPath("$[0].senderUsername").value("ana"))
+                .andExpect(jsonPath("$[1].id").value(withPhoto))
+                .andExpect(jsonPath("$[1].senderUsername").value("bea"))
+                .andExpect(jsonPath("$[2].id").value(onlyPhoto))
+                .andExpect(jsonPath("$[2].senderRole").value("MANAGER"));
+        // ...y la app se pone al día pidiendo solo lo posterior al último que tiene
+        mockMvc.perform(get(messages, id1).param("after", String.valueOf(withPhoto)).with(user(bea)))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(onlyPhoto));
+        mockMvc.perform(get(messages, id1).param("after", String.valueOf(onlyPhoto)).with(user(bea)))
+                .andExpect(jsonPath("$.length()").value(0));
+        // Al abrir el chat con un límite llegan los últimos mensajes, no los primeros
+        mockMvc.perform(get(messages, id1).param("limit", "2").with(user(ana)))
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(withPhoto))
+                .andExpect(jsonPath("$[1].id").value(onlyPhoto));
+
+        // Cada ola tiene su chat: el de la Ola 2 está vacío para Cris, y el personal entra a cualquiera
+        mockMvc.perform(get(messages, id2).with(user(cris)))
+                .andExpect(jsonPath("$.length()").value(0));
+        mockMvc.perform(get(messages, id2).with(user(ana))).andExpect(status().isForbidden());
+        mockMvc.perform(get(messages, id1).with(user(manager))).andExpect(jsonPath("$.length()").value(3));
+        mockMvc.perform(get(messages, id2).with(user(admin))).andExpect(jsonPath("$.length()").value(0));
+
+        // La foto la ven los de la ola y el personal, con su tipo y caché privada; los demás no
+        String photoUrl = "/api/v1/waves/{id}/chat/messages/{messageId}/photo";
+        for (User allowed : List.of(ana, bea, manager, admin)) {
+            mockMvc.perform(get(photoUrl, id1, withPhoto).with(user(allowed)))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.IMAGE_JPEG))
+                    .andExpect(content().bytes(JPEG))
+                    .andExpect(header().string("Cache-Control", "max-age=3600, private"));
+        }
+        mockMvc.perform(get(photoUrl, id1, withPhoto).with(user(cris))).andExpect(status().isForbidden());
+        mockMvc.perform(get(photoUrl, id1, withPhoto).with(user(dani))).andExpect(status().isForbidden());
+        mockMvc.perform(get(photoUrl, id1, withPhoto)).andExpect(status().isUnauthorized());
+        // Un mensaje sin foto, un mensaje de otra ola y uno que no existe: 404
+        mockMvc.perform(get(photoUrl, id1, first).with(user(ana))).andExpect(status().isNotFound());
+        mockMvc.perform(get(photoUrl, id2, withPhoto).with(user(cris))).andExpect(status().isNotFound());
+        mockMvc.perform(get(photoUrl, id1, onlyPhoto + 1000).with(user(ana))).andExpect(status().isNotFound());
+
+        // Nadie de otras olas recibió ningún aviso
+        verify(pushSender, after(500).never()).send(
+                any(), argThat(tokens -> tokens.contains("tok-cris") || tokens.contains("tok-dani")));
     }
 
     @Test

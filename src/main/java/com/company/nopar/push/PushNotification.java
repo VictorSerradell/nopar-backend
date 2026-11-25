@@ -1,6 +1,7 @@
 package com.company.nopar.push;
 
 import com.company.nopar.service.ShiftChangedEvent;
+import com.company.nopar.service.WaveChatMessageEvent;
 import com.company.nopar.service.WaveCalledEvent;
 
 import java.time.format.DateTimeFormatter;
@@ -19,6 +20,7 @@ public record PushNotification(String title, String body, Map<String, String> da
     static final int MAX_BODY_CHARS = 140;
 
     static final String WAVE_CALL_TYPE = "wave_call";
+    static final String CHAT_TYPE = "chat";
     /** Debe coincidir con PushChannel.WAVE_CALLS de la app Android. */
     static final String WAVE_CALL_CHANNEL = "nopar_wave_calls";
 
@@ -83,6 +85,23 @@ public record PushNotification(String title, String body, Map<String, String> da
         data.put("workDate", event.workDate().toString());
         return new PushNotification(event.waveName() + ": " + event.message(),
                 "Abre la app y pulsa «Enterado»", data);
+    }
+
+    /**
+     * Un mensaje nuevo en el chat de una ola: la ola como título y, en el texto, quién escribe y qué (o «Foto» si solo
+     * lleva una imagen). En data, type = "chat", waveId y waveName le dicen a la app qué chat abrir (y cómo titularlo); workDate y messageId, qué mensaje es.
+     */
+    public static PushNotification forChatMessage(WaveChatMessageEvent event) {
+        boolean hasText = event.text() != null && !event.text().isBlank();
+        String content = hasText ? (event.hasPhoto() ? "📷 " + event.text() : event.text()) : "📷 Foto";
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("type", CHAT_TYPE);
+        data.put("waveId", event.waveId().toString());
+        data.put("waveName", event.waveName());
+        data.put("workDate", event.workDate().toString());
+        data.put("messageId", event.messageId().toString());
+        return new PushNotification(event.waveName(),
+                abbreviate(event.senderUsername() + ": " + content, MAX_BODY_CHARS), data);
     }
 
     /**
