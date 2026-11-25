@@ -71,6 +71,9 @@ public interface ShiftAssignmentRepository extends JpaRepository<ShiftAssignment
 
     boolean existsByWorkDateAndVehicleIdAndIdNot(LocalDate workDate, Long vehicleId, Long id);
 
+    /** Si el turno existe y es de ese día, sin traerlo: para limitar a un encargado a los turnos de hoy. */
+    boolean existsByIdAndWorkDate(Long id, LocalDate workDate);
+
     boolean existsByWaveId(Long waveId);
 
     boolean existsByVehicleId(Long vehicleId);

@@ -12,8 +12,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,6 +43,22 @@ class UserServiceTest {
 
     @InjectMocks
     private UserService userService;
+
+    @Test
+    void whenListUsers_thenReturnsThemSortedByUsernameIgnoringCase() {
+        User ana = new User();
+        ana.setUsername("ana");
+        User zeta = new User();
+        zeta.setUsername("Zeta");
+        when(userRepository.findAll(any(Sort.class))).thenReturn(List.of(ana, zeta));
+
+        List<User> users = userService.listUsers();
+
+        assertThat(users).containsExactly(ana, zeta);
+        ArgumentCaptor<Sort> sort = ArgumentCaptor.forClass(Sort.class);
+        verify(userRepository).findAll(sort.capture());
+        assertThat(sort.getValue()).isEqualTo(Sort.by(Sort.Order.asc("username").ignoreCase()));
+    }
 
     @Test
     void givenNewUsername_whenCreateDriver_thenSavesDriverWithEncodedPassword() {

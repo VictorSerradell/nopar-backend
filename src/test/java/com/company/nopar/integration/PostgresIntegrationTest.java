@@ -637,6 +637,8 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.newPassword").exists())
                 // el administrador restablece la contraseña de un conductor sin conocer la actual
                 .andExpect(jsonPath("$.paths['/api/v1/admin/users/{id}/password'].patch").exists())
+                // ...y lista los usuarios para elegir a quién
+                .andExpect(jsonPath("$.paths['/api/v1/admin/users'].get").exists())
                 .andExpect(jsonPath("$.components.schemas.ResetPasswordRequest.properties.newPassword").exists())
                 // el alta del parte es multipart y la foto se describe como imagen binaria
                 .andExpect(jsonPath("$.paths['/api/v1/inspections'].post.requestBody.content['multipart/form-data']").exists())
@@ -680,6 +682,13 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/wave-calls/{id}/acknowledge'].post").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/admin/users/managers'].post").exists())
                 .andExpect(jsonPath("$.components.schemas.WaveCallResponse.properties.recipients").exists())
+                // repetir la llamada solo a los que faltan, y la planificación de hoy del encargado
+                .andExpect(jsonPath("$.components.schemas.WaveCallResponse.properties.canRecall").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/wave-calls/{id}/recall'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/schedule'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/shifts'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/shifts/{id}'].patch").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/dispatch/shifts/{id}'].delete").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.acknowledged").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.canAcknowledge").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
@@ -855,6 +864,184 @@ class PostgresIntegrationTest {
         mockMvc.perform(patch("/api/v1/admin/users/999999/password")
                         .with(user(admin)).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void onlyAnAdminListsTheUsersByNameWithoutPasswordsOverHttp() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User zeta = userService.createDriver("Zeta", "clave-segura-123");
+        User manager = userService.createManager("encargado1", "clave-segura-123");
+        userService.createDriver("ana", "clave-segura-123");
+
+        mockMvc.perform(get("/api/v1/admin/users"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/admin/users").with(user(zeta)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/admin/users").with(user(manager)))
+                .andExpect(status().isForbidden());
+
+        // Por nombre sin distinguir mayúsculas: "Zeta" va después de "ana", no antes
+        mockMvc.perform(get("/api/v1/admin/users").with(user(admin)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].username").value("admin1"))
+                .andExpect(jsonPath("$[0].role").value("ADMIN"))
+                .andExpect(jsonPath("$[1].username").value("ana"))
+                .andExpect(jsonPath("$[1].role").value("DRIVER"))
+                .andExpect(jsonPath("$[2].username").value("encargado1"))
+                .andExpect(jsonPath("$[2].role").value("MANAGER"))
+                .andExpect(jsonPath("$[3].username").value("Zeta"))
+                .andExpect(jsonPath("$..password").isEmpty());
+    }
+
+    @Test
+    void aManagerBuildsTodaysShiftsAndRecallsOnlyWhoIsMissingOverHttp() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User manager = userService.createManager("encargado1", "clave-segura-123");
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User cris = saveUser("cris", User.Role.DRIVER);
+        Wave wave1 = saveWave("Ola 1", LocalTime.of(9, 30));
+        Wave wave2 = saveWave("Ola 2", LocalTime.of(10, 30));
+        Vehicle van1 = saveVehicle("1111AAA", 1000);
+        Vehicle van2 = saveVehicle("2222BBB", 2000);
+        Vehicle van3 = saveVehicle("3333CCC", 3000);
+        Vehicle workshop = saveVehicle("4444DDD", 4000);
+        workshop.setStatus(Vehicle.VehicleStatus.MAINTENANCE);
+        vehicleRepository.save(workshop);
+        MediaType json = MediaType.APPLICATION_JSON;
+        String shiftsUrl = "/api/v1/dispatch/shifts";
+        String callsUrl = "/api/v1/dispatch/wave-calls";
+
+        // Un conductor no ve ni toca la planificación
+        mockMvc.perform(get("/api/v1/dispatch/schedule").with(user(ana))).andExpect(status().isForbidden());
+
+        // Al empezar el día no hay turnos: todos los conductores y las furgonetas en servicio están libres
+        mockMvc.perform(get("/api/v1/dispatch/schedule").with(user(manager)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.date").value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.waves.length()").value(2))
+                .andExpect(jsonPath("$.waves[0].name").value("Ola 1"))
+                .andExpect(jsonPath("$.waves[0].shifts.length()").value(0))
+                .andExpect(jsonPath("$.freeDrivers.length()").value(3))
+                .andExpect(jsonPath("$.freeDrivers[0].username").value("ana"))
+                // la furgoneta en mantenimiento no se puede asignar y no sale entre las libres
+                .andExpect(jsonPath("$.freeVehicles.length()").value(3))
+                .andExpect(jsonPath("$..password").isEmpty());
+
+        // El encargado pone a Ana y a Bea en la Ola 1
+        long anaShift = idOf(mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json)
+                        .content(shiftBody(wave1, ana, van1)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.workDate").value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.waveName").value("Ola 1"))
+                .andExpect(jsonPath("$.driverUsername").value("ana"))
+                .andExpect(jsonPath("$.vehicleLicensePlate").value("1111AAA")));
+        long beaShift = idOf(mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json)
+                        .content(shiftBody(wave1, bea, van2)))
+                .andExpect(status().isCreated()));
+
+        // Las mismas reglas que el administrador: sin repetir conductor ni furgoneta, ni furgonetas en el taller
+        mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json).content(shiftBody(wave2, ana, van3)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json).content(shiftBody(wave2, cris, van1)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json).content(shiftBody(wave2, cris, workshop)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json).content("{\"waveId\": " + wave2.getId() + "}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post(shiftsUrl).with(user(ana)).contentType(json).content(shiftBody(wave2, cris, van3)))
+                .andExpect(status().isForbidden());
+
+        // La planificación refleja los turnos y quita de las libres a quien ya tiene uno
+        mockMvc.perform(get("/api/v1/dispatch/schedule").with(user(manager)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.waves[0].shifts.length()").value(2))
+                .andExpect(jsonPath("$.waves[0].shifts[0].driverUsername").value("ana"))
+                .andExpect(jsonPath("$.waves[0].shifts[1].driverUsername").value("bea"))
+                .andExpect(jsonPath("$.freeDrivers.length()").value(1))
+                .andExpect(jsonPath("$.freeDrivers[0].username").value("cris"))
+                .andExpect(jsonPath("$.freeVehicles.length()").value(1))
+                .andExpect(jsonPath("$.freeVehicles[0].licensePlate").value("3333CCC"));
+
+        // El encargado llama a la Ola 1 (Ana y Bea) y Cris entra después en la ola
+        long callId = idOf(mockMvc.perform(post("/api/v1/dispatch/waves/{id}/calls", wave1.getId()).with(user(manager)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.recipientCount").value(2)));
+        mockMvc.perform(post(shiftsUrl).with(user(manager)).contentType(json).content(shiftBody(wave1, cris, van3)))
+                .andExpect(status().isCreated());
+
+        // Faltan Ana y Bea (no han confirmado) y Cris (no recibió la llamada): «volver a llamar» llamaría a 3
+        mockMvc.perform(get(callsUrl).with(user(manager)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(callId))
+                .andExpect(jsonPath("$[0].recallCount").value(3))
+                .andExpect(jsonPath("$[0].canRecall").value(true));
+
+        // Ana confirma: faltan Bea y Cris
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(ana)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(callsUrl).with(user(manager)))
+                .andExpect(jsonPath("$[0].recallCount").value(2));
+
+        // Un conductor no puede repetir la llamada; el encargado sí, y la nueva arrastra la confirmación de Ana
+        mockMvc.perform(post(callsUrl + "/{id}/recall", callId).with(user(ana))).andExpect(status().isForbidden());
+        long recallId = idOf(mockMvc.perform(post(callsUrl + "/{id}/recall", callId).with(user(manager)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message").value("Subid"))
+                .andExpect(jsonPath("$.open").value(true))
+                .andExpect(jsonPath("$.recipientCount").value(3))
+                .andExpect(jsonPath("$.acknowledgedCount").value(1))
+                .andExpect(jsonPath("$.recallCount").value(2))
+                .andExpect(jsonPath("$.recipients[0].driverUsername").value("ana"))
+                .andExpect(jsonPath("$.recipients[0].acknowledged").value(true))
+                .andExpect(jsonPath("$.recipients[1].driverUsername").value("bea"))
+                .andExpect(jsonPath("$.recipients[1].acknowledged").value(false))
+                .andExpect(jsonPath("$.recipients[2].driverUsername").value("cris"))
+                .andExpect(jsonPath("$.recipients[2].acknowledged").value(false)));
+
+        // La original, que seguía vigente, queda cerrada y ya no se puede repetir (la última es la nueva)
+        mockMvc.perform(get(callsUrl + "/{id}", callId).with(user(manager)))
+                .andExpect(jsonPath("$.open").value(false))
+                .andExpect(jsonPath("$.canRecall").value(false));
+        mockMvc.perform(post(callsUrl + "/{id}/recall", callId).with(user(manager))).andExpect(status().isConflict());
+        // Bea ya no puede confirmar la llamada cerrada, pero sí la nueva
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", callId).with(user(bea)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", recallId).with(user(bea))).andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/wave-calls/{id}/acknowledge", recallId).with(user(cris))).andExpect(status().isOk());
+
+        // Ya nadie falta: no hay nada que repetir
+        mockMvc.perform(get(callsUrl).with(user(manager)))
+                .andExpect(jsonPath("$[0].id").value(recallId))
+                .andExpect(jsonPath("$[0].recallCount").value(0))
+                .andExpect(jsonPath("$[0].canRecall").value(false));
+        mockMvc.perform(post(callsUrl + "/{id}/recall", recallId).with(user(manager))).andExpect(status().isConflict());
+
+        // Mover y quitar turnos de hoy
+        mockMvc.perform(patch(shiftsUrl + "/{id}", beaShift).with(user(manager)).contentType(json)
+                        .content("{\"waveId\": " + wave2.getId() + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.waveName").value("Ola 2"));
+        mockMvc.perform(patch(shiftsUrl + "/{id}", beaShift).with(user(manager)).contentType(json).content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(delete(shiftsUrl + "/{id}", anaShift).with(user(manager))).andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/v1/dispatch/schedule").with(user(manager)))
+                .andExpect(jsonPath("$.freeDrivers[0].username").value("ana"));
+        mockMvc.perform(delete(shiftsUrl + "/{id}", 999999).with(user(manager))).andExpect(status().isNotFound());
+
+        // Los turnos de otros días son del administrador: el encargado no los toca
+        ShiftAssignment tomorrow = shiftAssignmentRepository.save(shift(LocalDate.now().plusDays(1), wave1, ana, van1, admin));
+        mockMvc.perform(patch(shiftsUrl + "/{id}", tomorrow.getId()).with(user(manager)).contentType(json)
+                        .content("{\"waveId\": " + wave2.getId() + "}"))
+                .andExpect(status().isConflict());
+        mockMvc.perform(delete(shiftsUrl + "/{id}", tomorrow.getId()).with(user(manager)))
+                .andExpect(status().isConflict());
+        assertThat(shiftAssignmentRepository.existsById(tomorrow.getId())).isTrue();
+    }
+
+    private static String shiftBody(Wave wave, User driver, Vehicle van) {
+        return "{\"waveId\": " + wave.getId() + ", \"driverId\": " + driver.getId() + ", \"vehicleId\": " + van.getId() + "}";
     }
 
     // ------------------------------------------------------------------ limpieza de refresh tokens

@@ -14,10 +14,13 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -43,6 +46,30 @@ class AdminUserControllerTest {
 
     @MockitoBean
     private JwtService jwtService;
+
+    @Test
+    void whenListUsers_thenReturnsIdUsernameAndRoleWithoutPasswords() throws Exception {
+        User driver = new User();
+        driver.setId(10L);
+        driver.setUsername("ana");
+        driver.setPassword("$2a$10$hash-que-no-debe-salir");
+        driver.setRole(User.Role.DRIVER);
+        User manager = new User();
+        manager.setId(11L);
+        manager.setUsername("encargado1");
+        manager.setPassword("$2a$10$otro-hash-que-no-debe-salir");
+        manager.setRole(User.Role.MANAGER);
+        when(userService.listUsers()).thenReturn(List.of(driver, manager));
+
+        mockMvc.perform(get("/api/v1/admin/users"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(10))
+                .andExpect(jsonPath("$[0].username").value("ana"))
+                .andExpect(jsonPath("$[0].role").value("DRIVER"))
+                .andExpect(jsonPath("$[1].role").value("MANAGER"))
+                .andExpect(jsonPath("$..password").isEmpty());
+    }
 
     @Test
     void givenValidRequest_whenCreateDriver_thenCreatedWithoutPasswordInTheResponse() throws Exception {

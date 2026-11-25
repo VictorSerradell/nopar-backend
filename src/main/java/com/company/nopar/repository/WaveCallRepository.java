@@ -27,6 +27,9 @@ public interface WaveCallRepository extends JpaRepository<WaveCall, Long> {
             """)
     Optional<WaveCall> findWithDetailsById(@Param("id") Long id);
 
+    /** La llamada más reciente a una ola un día (sin traer sus relaciones): solo esa se puede repetir. */
+    Optional<WaveCall> findFirstByWaveIdAndWorkDateOrderByCalledAtDescIdDesc(Long waveId, LocalDate workDate);
+
     /** Las llamadas de un día, la más reciente primero. */
     @Query("""
             select c from WaveCall c

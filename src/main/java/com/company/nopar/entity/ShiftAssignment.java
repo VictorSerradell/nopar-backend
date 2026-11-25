@@ -38,7 +38,7 @@ public class ShiftAssignment {
     @JoinColumn(name = "vehicle_id", nullable = false)
     private Vehicle vehicle;
 
-    /** El administrador que hizo la asignación. */
+    /** Quien hizo la asignación: un administrador o, para los turnos de hoy, un encargado. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by", nullable = false)
     private User createdBy;

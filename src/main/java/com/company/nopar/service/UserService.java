@@ -7,11 +7,13 @@ import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +26,15 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
     private final DeviceService deviceService;
+
+    /**
+     * Todos los usuarios, por nombre sin distinguir mayúsculas, para que un administrador elija a quién restablecer la
+     * contraseña. Son pocas decenas (conductores y encargados de una estación), así que no se pagina.
+     */
+    @Transactional(readOnly = true)
+    public List<User> listUsers() {
+        return userRepository.findAll(Sort.by(Sort.Order.asc("username").ignoreCase()));
+    }
 
     @Transactional
     public User createDriver(String username, String rawPassword) {
