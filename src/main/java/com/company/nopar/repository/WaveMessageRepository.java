@@ -37,6 +37,10 @@ public interface WaveMessageRepository extends JpaRepository<WaveMessage, Long> 
     List<WaveMessage> findAfter(@Param("waveId") Long waveId, @Param("date") LocalDate date,
                                 @Param("afterId") Long afterId, Pageable page);
 
+    /** El id del último mensaje del chat de una ola un día; null si todavía no hay ninguno. */
+    @Query("select max(m.id) from WaveMessage m where m.waveId = :waveId and m.workDate = :date")
+    Long findNewestId(@Param("waveId") Long waveId, @Param("date") LocalDate date);
+
     /** Un mensaje de esa ola (sin traer a su autor): para servir su foto. */
     Optional<WaveMessage> findByIdAndWaveId(Long id, Long waveId);
 }

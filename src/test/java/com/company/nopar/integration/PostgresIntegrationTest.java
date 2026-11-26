@@ -119,7 +119,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V11) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V12) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -260,7 +260,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -277,14 +277,16 @@ class PostgresIntegrationTest {
                 "idx_announcement_reads_user",
                 "idx_wave_calls_work_date",
                 "idx_wave_call_recipients_driver",
-                "idx_wave_messages_chat");
+                "idx_wave_messages_chat",
+                "idx_wave_messages_date");
         assertThat(uniques).contains(
                 "uk_waves_name",
                 "uk_shift_assignments_driver_day",
                 "uk_shift_assignments_vehicle_day",
                 "uk_announcement_reads_announcement_user",
                 "uk_device_tokens_token",
-                "uk_wave_call_recipients_call_driver");
+                "uk_wave_call_recipients_call_driver",
+                "uq_wave_chat_reads_user_wave");
     }
 
     @Test
@@ -720,6 +722,10 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/waves/{waveId}/chat/messages/{messageId}/photo'].get.responses['200'].content['image/jpeg']").exists())
                 .andExpect(jsonPath("$.components.schemas.WaveMessageResponse.properties.photoUrl").exists())
                 .andExpect(jsonPath("$.components.schemas.WaveMessageResponse.properties.senderRole").exists())
+                // marcar el chat como leido y contar lo que queda sin leer
+                .andExpect(jsonPath("$.paths['/api/v1/waves/{waveId}/chat/read'].post.responses['204']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/chat/unread'].get").exists())
+                .andExpect(jsonPath("$.components.schemas.ChatUnreadResponse.properties.unread").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.acknowledged").exists())
                 .andExpect(jsonPath("$.components.schemas.MyWaveCallResponse.properties.canAcknowledge").exists())
                 // el usuario autenticado sale del token: ni es un parámetro ni su entidad aparece en el contrato
@@ -1544,6 +1550,97 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void theUnreadMessagesCountOnlyTheOthersOfTodayAfterTheReadMarkerAndTheMarkerOnlyMovesForward() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User manager = saveUser("encargado1", User.Role.MANAGER);
+        User ana = saveUser("ana", User.Role.DRIVER);
+        User bea = saveUser("bea", User.Role.DRIVER);
+        User cris = saveUser("cris", User.Role.DRIVER);
+        User dani = saveUser("dani", User.Role.DRIVER);
+        Wave wave1 = saveWave("Ola 1", LocalTime.of(9, 30));
+        Wave wave2 = saveWave("Ola 2", LocalTime.of(10, 30));
+        Wave wave3 = saveWave("Ola 3", LocalTime.of(11, 30));
+        LocalDate today = LocalDate.now();
+        shiftAssignmentRepository.save(shift(today, wave1, ana, saveVehicle("1111AAA", 1000), admin));
+        shiftAssignmentRepository.save(shift(today, wave1, bea, saveVehicle("2222BBB", 2000), admin));
+        shiftAssignmentRepository.save(shift(today, wave2, cris, saveVehicle("3333CCC", 3000), admin));
+        // Dani sale en la Ola 1, pero mañana: hoy no tiene chat
+        shiftAssignmentRepository.save(shift(today.plusDays(1), wave1, dani, saveVehicle("4444DDD", 4000), admin));
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        long id1 = wave1.getId();
+        long id2 = wave2.getId();
+        long id3 = wave3.getId();
+        String read = "/api/v1/waves/{id}/chat/read";
+
+        // Sin mensajes no hay nada sin leer, para nadie; sin token, 401
+        for (User member : List.of(admin, manager, ana, bea, cris, dani)) {
+            expectUnread(member);
+        }
+        mockMvc.perform(get("/api/v1/chat/unread")).andExpect(status().isUnauthorized());
+
+        // Un mensaje de ayer no cuenta. Hoy: dos de Bea y uno del encargado en la Ola 1, y uno de Cris en la Ola 2
+        saveChatMessage(wave1, today.minusDays(1), bea, "de ayer");
+        long first = saveChatMessage(wave1, today, bea, "uno");
+        long second = saveChatMessage(wave1, today, bea, "dos");
+        long third = saveChatMessage(wave1, today, manager, "tres");
+        saveChatMessage(wave2, today, cris, "cuatro");
+
+        // Cada uno cuenta los de otros (los suyos no). Un conductor solo ve su ola; el personal, todas; Dani, nada
+        expectUnread(ana, id1, 3);
+        expectUnread(bea, id1, 1);
+        expectUnread(cris);
+        expectUnread(dani);
+        expectUnread(manager, id1, 2, id2, 1);
+        expectUnread(admin, id1, 3, id2, 1);
+
+        // Ana ha leído hasta el segundo: solo le queda el del encargado
+        markChatRead(ana, id1, second);
+        expectUnread(ana, id1, 1);
+        // Marcar uno anterior no hace retroceder el marcador
+        markChatRead(ana, id1, first);
+        expectUnread(ana, id1, 1);
+        // Un id que aún no existe se recorta al último mensaje real: los futuros seguirán contando
+        markChatRead(ana, id1, third + 1000);
+        expectUnread(ana);
+        assertThat(jdbc.queryForObject("select last_read_id from wave_chat_reads where user_id = ? and wave_id = ?",
+                Long.class, ana.getId(), id1)).isEqualTo(third);
+        // Tres marcas, una sola fila (la restricción única hace de upsert)
+        assertThat(jdbc.queryForObject("select count(*) from wave_chat_reads where user_id = ? and wave_id = ?",
+                Long.class, ana.getId(), id1)).isEqualTo(1L);
+
+        // Llega otro mensaje: vuelve a contar, y a los demás también
+        long fourth = saveChatMessage(wave1, today, bea, "cinco");
+        expectUnread(ana, id1, 1);
+        expectUnread(manager, id1, 3, id2, 1);
+        expectUnread(admin, id1, 4, id2, 1);
+
+        // El encargado lo lee todo en la Ola 1: le queda la Ola 2. Lo del administrador no cambia
+        markChatRead(manager, id1, fourth);
+        expectUnread(manager, id2, 1);
+        expectUnread(admin, id1, 4, id2, 1);
+
+        // Marcar una ola que hoy no tiene mensajes no deja ningún marcador
+        markChatRead(manager, id3, 50);
+        assertThat(jdbc.queryForObject("select count(*) from wave_chat_reads where user_id = ? and wave_id = ?",
+                Long.class, manager.getId(), id3)).isEqualTo(0L);
+
+        // Sin turno en la ola, sin token, con una ola que no existe o con un cuerpo inválido: no se marca nada
+        MediaType json = MediaType.APPLICATION_JSON;
+        mockMvc.perform(post(read, id1).with(user(cris)).contentType(json).content("{\"lastReadId\": 1}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(read, id1).with(user(dani)).contentType(json).content("{\"lastReadId\": 1}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(read, id1).contentType(json).content("{\"lastReadId\": 1}"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post(read, id1 + 1000).with(user(ana)).contentType(json).content("{\"lastReadId\": 1}"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post(read, id1).with(user(ana)).contentType(json).content("{}"))
+                .andExpect(status().isBadRequest());
+        assertThat(jdbc.queryForObject("select count(*) from wave_chat_reads where user_id in (?, ?)",
+                Long.class, cris.getId(), dani.getId())).isEqualTo(0L);
+    }
+
+    @Test
     void callingAWaveNotifiesOnlyItsDriversTodayAndTheyConfirmWithEnterado() throws Exception {
         User admin = saveUser("admin1", User.Role.ADMIN);
         User manager = saveUser("encargado1", User.Role.MANAGER);
@@ -2086,6 +2183,32 @@ class PostgresIntegrationTest {
     /** El parte tal como queda en la base de datos, con los datos que necesita la respuesta. */
     private InspectionResponse savedResponse(VehicleInspection inspection) {
         return InspectionResponse.from(inspectionRepository.findWithDetailsById(inspection.getId()).orElseThrow());
+    }
+
+    private long saveChatMessage(Wave wave, LocalDate day, User sender, String body) {
+        WaveMessage message = new WaveMessage();
+        message.setWaveId(wave.getId());
+        message.setWorkDate(day);
+        message.setSender(sender);
+        message.setBody(body);
+        return waveMessageRepository.save(message).getId();
+    }
+
+    /** Comprueba los mensajes sin leer que ve un usuario: pares (ola, cantidad) por orden de ola; sin pares, ninguno. */
+    private void expectUnread(User who, long... waveAndCount) throws Exception {
+        ResultActions result = mockMvc.perform(get("/api/v1/chat/unread").with(user(who)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(waveAndCount.length / 2));
+        for (int i = 0; i < waveAndCount.length; i += 2) {
+            result.andExpect(jsonPath("$[" + (i / 2) + "].waveId").value(waveAndCount[i]))
+                    .andExpect(jsonPath("$[" + (i / 2) + "].unread").value(waveAndCount[i + 1]));
+        }
+    }
+
+    private void markChatRead(User who, long waveId, long lastReadId) throws Exception {
+        mockMvc.perform(post("/api/v1/waves/{id}/chat/read", waveId).with(user(who))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lastReadId\": " + lastReadId + "}"))
+                .andExpect(status().isNoContent());
     }
 
     private Wave saveWave(String name, LocalTime startTime) {

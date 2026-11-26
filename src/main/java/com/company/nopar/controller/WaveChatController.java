@@ -1,5 +1,6 @@
 package com.company.nopar.controller;
 
+import com.company.nopar.dto.WaveChatReadRequest;
 import com.company.nopar.dto.WaveMessageRequest;
 import com.company.nopar.dto.WaveMessageResponse;
 import com.company.nopar.entity.User;
@@ -10,6 +11,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
@@ -93,6 +95,23 @@ public class WaveChatController {
         String text = request == null ? null : request.text();
         WaveMessageResponse saved = WaveMessageResponse.from(chatService.send(waveId, text, photo, currentUser));
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+    }
+
+    @Operation(summary = "Marca el chat de hoy como leído",
+            description = "La app lo llama mientras el chat está a la vista, con el id del mensaje más reciente que ha enseñado. Solo avanza (marcar uno anterior no cambia nada) y un id mayor que el último mensaje real se recorta a ese último. De ahí salen los sin leer de `GET /chat/unread`.")
+    @ApiResponse(responseCode = "204", description = "Marcado")
+    @ApiResponse(responseCode = "400", description = "Falta `lastReadId` o no es positivo")
+    @ApiResponse(responseCode = "403", description = "Eres un conductor sin turno hoy en esa ola")
+    @ApiResponse(responseCode = "404", description = "La ola no existe")
+    @PostMapping("/read")
+    @PreAuthorize("hasAnyRole('DRIVER', 'MANAGER', 'ADMIN')")
+    public ResponseEntity<Void> markRead(
+            @PathVariable Long waveId,
+            @Valid @RequestBody WaveChatReadRequest request,
+            @AuthenticationPrincipal User currentUser
+    ) {
+        chatService.markRead(waveId, request.lastReadId(), currentUser);
+        return ResponseEntity.noContent().build();
     }
 
     @Operation(summary = "Descarga la foto de un mensaje",

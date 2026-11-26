@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -51,6 +52,7 @@ class WaveChatControllerTest {
 
     private static final String MESSAGES = "/api/v1/waves/1/chat/messages";
     private static final String PHOTOS = "/api/v1/waves/1/chat/photos";
+    private static final String READ = "/api/v1/waves/1/chat/read";
 
     @Autowired
     private MockMvc mockMvc;
@@ -196,6 +198,55 @@ class WaveChatControllerTest {
         mockMvc.perform(post(MESSAGES).with(user(driver()))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"hola\"}"))
                 .andExpect(status().isForbidden());
+    }
+
+    // ---------------------------------------------------------------- marcar como leido
+
+    @Test
+    void givenNoToken_whenMarkRead_thenUnauthorized() throws Exception {
+        mockMvc.perform(post(READ).contentType(MediaType.APPLICATION_JSON).content("{\"lastReadId\":12}"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(chatService);
+    }
+
+    @Test
+    void givenAMessageId_whenMarkRead_thenNoContentAndTheServiceGetsItWithTheUserOfTheToken() throws Exception {
+        mockMvc.perform(post(READ).with(user(driver()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lastReadId\":12}"))
+                .andExpect(status().isNoContent());
+
+        verify(chatService).markRead(eq(1L), eq(12L), argThat(u -> Long.valueOf(2L).equals(u.getId())));
+    }
+
+    @Test
+    void givenAMissingOrNotPositiveId_whenMarkRead_thenBadRequestWithoutTouchingTheService() throws Exception {
+        for (String body : List.of("{}", "{\"lastReadId\":null}", "{\"lastReadId\":0}", "{\"lastReadId\":-3}")) {
+            mockMvc.perform(post(READ).with(user(driver())).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest());
+        }
+
+        verifyNoInteractions(chatService);
+    }
+
+    @Test
+    void givenADriverWithoutAShiftInTheWave_whenMarkRead_thenForbidden() throws Exception {
+        doThrow(new AccessDeniedException("Hoy no tienes turno en esta ola"))
+                .when(chatService).markRead(eq(1L), eq(12L), any(User.class));
+
+        mockMvc.perform(post(READ).with(user(driver()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lastReadId\":12}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void givenAnUnknownWave_whenMarkRead_thenNotFound() throws Exception {
+        doThrow(new ResourceNotFoundException("Ola no encontrada con ID: 1"))
+                .when(chatService).markRead(eq(1L), eq(12L), any(User.class));
+
+        mockMvc.perform(post(READ).with(user(driver()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lastReadId\":12}"))
+                .andExpect(status().isNotFound());
     }
 
     // ---------------------------------------------------------------- escribir con foto

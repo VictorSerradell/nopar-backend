@@ -1,5 +1,6 @@
 package com.company.nopar.service;
 
+import com.company.nopar.entity.ShiftAssignment;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Wave;
 import com.company.nopar.entity.WaveMessage;
@@ -7,6 +8,7 @@ import com.company.nopar.exception.InvalidRequestException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.UserRepository;
+import com.company.nopar.repository.WaveChatReadRepository;
 import com.company.nopar.repository.WaveMessageRepository;
 import com.company.nopar.repository.WaveRepository;
 import lombok.RequiredArgsConstructor;
@@ -22,8 +24,11 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -37,6 +42,9 @@ import java.util.Set;
  *
  * Al escribir se avisa por push a los demás miembros: los conductores de la ola y los encargados y administradores,
  * menos a quien escribe.
+ *
+ * Cada usuario tiene, por ola, un marcador con el último mensaje que ha leído: de ahí salen los mensajes sin leer
+ * (los de otros, de hoy, posteriores al marcador).
  */
 @Service
 @RequiredArgsConstructor
@@ -52,6 +60,7 @@ public class WaveChatService {
     private final WaveRepository waveRepository;
     private final ShiftAssignmentRepository shiftRepository;
     private final WaveMessageRepository messageRepository;
+    private final WaveChatReadRepository readRepository;
     private final UserRepository userRepository;
     private final FileStorageService fileStorage;
     private final ApplicationEventPublisher eventPublisher;
@@ -149,6 +158,55 @@ public class WaveChatService {
             throw new ResourceNotFoundException("El mensaje no lleva foto");
         }
         return fileStorage.load(message.getPhotoFile());
+    }
+
+    /**
+     * Marca el chat de hoy como leído hasta el mensaje {@code lastReadId} (el más reciente que la app ha enseñado).
+     * Solo avanza: marcar un mensaje anterior al ya leído no cambia nada, y un id mayor que el último mensaje real se
+     * recorta a ese último (un error de la app no puede dejar sin avisar los mensajes que aún no existen).
+     *
+     * @throws ResourceNotFoundException si la ola no existe
+     * @throws AccessDeniedException     si es un conductor sin turno hoy en esa ola
+     */
+    @Transactional
+    public void markRead(Long waveId, Long lastReadId, User user) {
+        findWave(waveId);
+        LocalDate today = LocalDate.now();
+        requireMember(waveId, today, user);
+
+        Long newest = messageRepository.findNewestId(waveId, today);
+        if (newest == null) {
+            return; // hoy aún no se ha escrito nada: no hay nada que marcar
+        }
+        readRepository.markRead(user.getId(), waveId, Math.min(lastReadId, newest), LocalDateTime.now());
+    }
+
+    /**
+     * Los mensajes sin leer de hoy por ola (id de la ola → cuántos); solo salen las olas que tienen alguno. Un
+     * conductor solo cuenta la ola en la que trabaja hoy; encargados y administradores, todas.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, Long> getUnread(User user) {
+        LocalDate today = LocalDate.now();
+        Map<Long, Long> unread = new LinkedHashMap<>();
+
+        Long onlyWaveId = null;
+        if (!isStaff(user)) {
+            Optional<ShiftAssignment> shift = shiftRepository.findByWorkDateAndDriverId(today, user.getId());
+            if (shift.isEmpty()) {
+                return unread; // sin turno hoy no hay chat que leer
+            }
+            onlyWaveId = shift.get().getWave().getId();
+        }
+
+        for (Object[] row : readRepository.countUnread(user.getId(), today)) {
+            Long waveId = ((Number) row[0]).longValue();
+            long count = ((Number) row[1]).longValue();
+            if (count > 0 && (onlyWaveId == null || onlyWaveId.equals(waveId))) {
+                unread.put(waveId, count);
+            }
+        }
+        return unread;
     }
 
     private Wave findWave(Long waveId) {

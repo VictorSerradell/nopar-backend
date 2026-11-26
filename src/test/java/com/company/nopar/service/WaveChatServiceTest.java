@@ -1,5 +1,6 @@
 package com.company.nopar.service;
 
+import com.company.nopar.entity.ShiftAssignment;
 import com.company.nopar.entity.User;
 import com.company.nopar.entity.Wave;
 import com.company.nopar.entity.WaveMessage;
@@ -8,6 +9,7 @@ import com.company.nopar.exception.InvalidRequestException;
 import com.company.nopar.exception.ResourceNotFoundException;
 import com.company.nopar.repository.ShiftAssignmentRepository;
 import com.company.nopar.repository.UserRepository;
+import com.company.nopar.repository.WaveChatReadRepository;
 import com.company.nopar.repository.WaveMessageRepository;
 import com.company.nopar.repository.WaveRepository;
 import org.junit.jupiter.api.Test;
@@ -27,6 +29,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +54,9 @@ class WaveChatServiceTest {
 
     @Mock
     private WaveMessageRepository messageRepository;
+
+    @Mock
+    private WaveChatReadRepository readRepository;
 
     @Mock
     private UserRepository userRepository;
@@ -334,6 +340,109 @@ class WaveChatServiceTest {
         verifyNoInteractions(messageRepository, fileStorage);
     }
 
+    // ---------------------------------------------------------------- marcar como leido
+
+    @Test
+    void givenAnUnknownWave_whenMarkRead_thenNotFoundAndNothingIsWritten() {
+        when(waveRepository.findById(9L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.markRead(9L, 5L, ana)).isInstanceOf(ResourceNotFoundException.class);
+
+        verifyNoInteractions(readRepository);
+    }
+
+    @Test
+    void givenADriverWithoutAShiftInThatWaveToday_whenMarkRead_thenForbiddenAndNothingIsWritten() {
+        givenWave();
+        givenDriverHasShift(ana, false);
+
+        assertThatThrownBy(() -> service.markRead(1L, 5L, ana)).isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(readRepository);
+    }
+
+    @Test
+    void givenNoMessagesToday_whenMarkRead_thenNothingIsWritten() {
+        givenWave();
+        givenDriverHasShift(ana, true);
+        when(messageRepository.findNewestId(1L, LocalDate.now())).thenReturn(null);
+
+        service.markRead(1L, 5L, ana);
+
+        verifyNoInteractions(readRepository);
+    }
+
+    @Test
+    void givenAMessageTheAppHasShown_whenMarkRead_thenTheMarkerGoesUpToIt() {
+        givenWave();
+        givenDriverHasShift(ana, true);
+        when(messageRepository.findNewestId(1L, LocalDate.now())).thenReturn(12L);
+
+        service.markRead(1L, 11L, ana);
+
+        verify(readRepository).markRead(eq(2L), eq(1L), eq(11L), any(LocalDateTime.class));
+    }
+
+    @Test
+    void givenAnIdBeyondTheNewestMessage_whenMarkRead_thenItIsCutToTheNewest() {
+        givenWave();
+        givenDriverHasShift(ana, true);
+        when(messageRepository.findNewestId(1L, LocalDate.now())).thenReturn(12L);
+
+        service.markRead(1L, 500L, ana);
+
+        verify(readRepository).markRead(eq(2L), eq(1L), eq(12L), any(LocalDateTime.class));
+    }
+
+    @Test
+    void givenAManager_whenMarkRead_thenNoShiftIsNeeded() {
+        givenWave();
+        when(messageRepository.findNewestId(1L, LocalDate.now())).thenReturn(12L);
+
+        service.markRead(1L, 12L, manager);
+
+        verify(readRepository).markRead(eq(5L), eq(1L), eq(12L), any(LocalDateTime.class));
+        verifyNoInteractions(shiftRepository);
+    }
+
+    // ---------------------------------------------------------------- mensajes sin leer
+
+    @Test
+    void givenADriverWithoutAShiftToday_whenGetUnread_thenNothingAndNoCounting() {
+        when(shiftRepository.findByWorkDateAndDriverId(any(LocalDate.class), eq(2L))).thenReturn(Optional.empty());
+
+        assertThat(service.getUnread(ana)).isEmpty();
+
+        verifyNoInteractions(readRepository);
+    }
+
+    @Test
+    void givenADriverOfAWave_whenGetUnread_thenOnlyThatWaveCounts() {
+        when(shiftRepository.findByWorkDateAndDriverId(any(LocalDate.class), eq(2L)))
+                .thenReturn(Optional.of(shift(ana, 1L)));
+        when(readRepository.countUnread(eq(2L), any(LocalDate.class)))
+                .thenReturn(List.of(unreadRow(1L, 3L), unreadRow(2L, 7L)));
+
+        assertThat(service.getUnread(ana)).containsExactly(Map.entry(1L, 3L));
+    }
+
+    @Test
+    void givenAManager_whenGetUnread_thenEveryWaveWithUnreadMessagesCountsAndNoShiftIsLooked() {
+        when(readRepository.countUnread(eq(5L), any(LocalDate.class)))
+                .thenReturn(List.of(unreadRow(1L, 3L), unreadRow(2L, 7L), unreadRow(3L, 0L)));
+
+        assertThat(service.getUnread(manager)).containsExactly(Map.entry(1L, 3L), Map.entry(2L, 7L));
+
+        verifyNoInteractions(shiftRepository);
+    }
+
+    @Test
+    void givenNothingUnread_whenGetUnread_thenAnEmptyMap() {
+        when(readRepository.countUnread(eq(1L), any(LocalDate.class))).thenReturn(List.of());
+
+        assertThat(service.getUnread(admin)).isEmpty();
+    }
+
     // ---------------------------------------------------------------- datos de prueba
 
     private void givenWave() {
@@ -360,6 +469,19 @@ class WaveChatServiceTest {
     private void givenRecipients(List<Long> driverIds, List<Long> staffIds) {
         when(shiftRepository.findDriverIdsByWorkDateAndWaveId(any(LocalDate.class), eq(1L))).thenReturn(driverIds);
         when(userRepository.findIdsByRoleIn(anyCollection())).thenReturn(staffIds);
+    }
+
+    private static Object[] unreadRow(Long waveId, Long count) {
+        return new Object[]{waveId, count};
+    }
+
+    private static ShiftAssignment shift(User driver, Long waveId) {
+        Wave wave = new Wave();
+        wave.setId(waveId);
+        ShiftAssignment shift = new ShiftAssignment();
+        shift.setDriver(driver);
+        shift.setWave(wave);
+        return shift;
     }
 
     private static WaveMessage message(Long id, User sender, String body) {
