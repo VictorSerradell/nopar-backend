@@ -674,6 +674,7 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/auth/login'].post.security").isEmpty())
                 .andExpect(jsonPath("$.paths['/api/v1/auth/refresh'].post.security").isEmpty())
                 .andExpect(jsonPath("$.paths['/api/v1/auth/logout'].post.security").isEmpty())
+                .andExpect(jsonPath("$.paths['/health'].get.security").isEmpty())
                 .andExpect(jsonPath("$.paths['/api/v1/auth/logout-all'].post.security").doesNotExist())
                 // cambiar la contraseña exige token (hereda el requisito global) y el cuerpo lleva la actual y la nueva
                 .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch").exists())
@@ -939,6 +940,13 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.content[0].action").value("PASSWORD_CHANGED"))
                 .andExpect(jsonPath("$.content[0].actorUsername").value("admin1"))
                 .andExpect(jsonPath("$.content[0].targetUsername").value("admin1"));
+    }
+
+    @Test
+    void healthIsPublicAndAnswersOnceTheApplicationHasStarted() throws Exception {
+        mockMvc.perform(get("/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
     }
 
     @Test

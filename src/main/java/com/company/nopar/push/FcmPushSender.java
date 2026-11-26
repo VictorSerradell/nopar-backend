@@ -70,11 +70,27 @@ public class FcmPushSender implements PushSender {
      *                               descubrir en el primer aviso que las notificaciones no funcionan
      */
     public FcmPushSender(Path credentialsFile, String apiBaseUrl) {
-        Map<String, Object> credentials = readCredentials(credentialsFile);
-        this.clientEmail = required(credentials, "client_email", credentialsFile);
-        this.tokenUri = URI.create(required(credentials, "token_uri", credentialsFile));
-        String projectId = required(credentials, "project_id", credentialsFile);
-        this.privateKey = parsePrivateKey(required(credentials, "private_key", credentialsFile));
+        this(readCredentials(credentialsFile), credentialsFile.toString(), apiBaseUrl);
+    }
+
+    /**
+     * Con las credenciales en una variable de entorno (FCM_CREDENTIALS_JSON) en vez de en un fichero, para las
+     * plataformas que no tienen ficheros secretos (Railway y parecidas).
+     *
+     * @param credentials el JSON de la cuenta de servicio de Firebase, tal cual o codificado en Base64 (más cómodo:
+     *                    una variable de una sola línea)
+     * @throws IllegalStateException si no se puede leer o le faltan datos. El mensaje nunca cita el contenido: podría
+     *                               enseñar un trozo de la clave privada en el log
+     */
+    public static FcmPushSender fromCredentialsJson(String credentials, String apiBaseUrl) {
+        return new FcmPushSender(parseCredentialsValue(credentials), "FCM_CREDENTIALS_JSON", apiBaseUrl);
+    }
+
+    private FcmPushSender(Map<String, Object> credentials, String source, String apiBaseUrl) {
+        this.clientEmail = required(credentials, "client_email", source);
+        this.tokenUri = URI.create(required(credentials, "token_uri", source));
+        String projectId = required(credentials, "project_id", source);
+        this.privateKey = parsePrivateKey(required(credentials, "private_key", source));
         this.sendUri = URI.create(apiBaseUrl.replaceAll("/+$", "") + "/v1/projects/" + projectId + "/messages:send");
 
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(
@@ -211,10 +227,24 @@ public class FcmPushSender implements PushSender {
         }
     }
 
-    private static String required(Map<String, Object> credentials, String field, Path file) {
+    private static Map<String, Object> parseCredentialsValue(String value) {
+        String text = value == null ? "" : value.strip();
+        try {
+            if (!text.startsWith("{")) {
+                text = new String(Base64.getMimeDecoder().decode(text), StandardCharsets.UTF_8);
+            }
+            return parseJson(text);
+        } catch (RuntimeException e) {
+            // Sin el mensaje ni la causa del error: podrían citar un trozo de la clave privada
+            throw new IllegalStateException("No se pueden leer las credenciales de FCM en FCM_CREDENTIALS_JSON: "
+                    + "tiene que ser el JSON de la cuenta de servicio de Firebase, tal cual o en Base64");
+        }
+    }
+
+    private static String required(Map<String, Object> credentials, String field, String source) {
         Object value = credentials.get(field);
         if (!(value instanceof String) || ((String) value).isBlank()) {
-            throw new IllegalStateException("Las credenciales de FCM en " + file + " no tienen el campo «" + field
+            throw new IllegalStateException("Las credenciales de FCM en " + source + " no tienen el campo «" + field
                     + "»: tiene que ser el JSON de una cuenta de servicio de Firebase");
         }
         return (String) value;

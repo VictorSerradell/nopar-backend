@@ -1,5 +1,6 @@
 server:
-  port: 8080
+  # Railway (y otras plataformas) indican el puerto en PORT; sin esa variable, el 8080 de siempre
+  port: ${PORT:8080}
   # Detrás de un proxy inverso (Caddy, ver docker-compose) la IP real del cliente llega en X-Forwarded-For; sin esto
   # el límite de intentos de login vería siempre la IP del proxy. Solo se aceptan esas cabeceras de proxies internos
   forward-headers-strategy: native
@@ -79,11 +80,14 @@ application:
   push:
     fcm:
       # Notificaciones push con Firebase Cloud Messaging. Desactivado por defecto: sin credenciales no se envía nada y el
-      # resto de la aplicación funciona igual. Para activarlo: FCM_ENABLED=true y FCM_CREDENTIALS_FILE con la ruta del
-      # JSON de la cuenta de servicio de Firebase (de él salen el proyecto y la clave). Si está activado y las
-      # credenciales no se pueden leer, la aplicación no arranca
+      # resto de la aplicación funciona igual. Para activarlo: FCM_ENABLED=true y las credenciales de la cuenta de
+      # servicio de Firebase (de ellas salen el proyecto y la clave), de una de estas dos formas: FCM_CREDENTIALS_FILE
+      # con la ruta del JSON, o FCM_CREDENTIALS_JSON con el propio JSON (o su Base64) donde no hay ficheros secretos,
+      # como en Railway. Si están las dos, manda el fichero. Si está activado y las credenciales no se pueden leer, la
+      # aplicación no arranca
       enabled: ${FCM_ENABLED:false}
       credentials-file: ${FCM_CREDENTIALS_FILE:}
+      credentials-json: ${FCM_CREDENTIALS_JSON:}
   security:
     refresh-token-cleanup:
       # Borra los refresh tokens caducados (la tabla crece con cada inicio de sesión).

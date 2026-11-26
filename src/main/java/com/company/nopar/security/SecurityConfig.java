@@ -49,6 +49,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout").permitAll()
                         // cerrar todas las sesiones y cambiar la contraseña exigen un access token válido
                         .requestMatchers("/api/v1/auth/logout-all", "/api/v1/auth/password").authenticated()
+                        // estado del servicio (healthcheck de Railway y monitores externos): público y sin datos
+                        .requestMatchers("/health").permitAll()
                         // contrato OpenAPI y Swagger UI: los equipos de Android, iOS y web los leen sin token
                         // (en producción se desactivan con OPENAPI_ENABLED=false)
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()

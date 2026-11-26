@@ -28,7 +28,8 @@ public class OpenApiConfig {
     static final Set<String> PUBLIC_PATHS = Set.of(
             "/api/v1/auth/login",
             "/api/v1/auth/refresh",
-            "/api/v1/auth/logout");
+            "/api/v1/auth/logout",
+            "/health");
 
     static {
         // El usuario autenticado sale del token, no es un parámetro de la petición: que no aparezca en el contrato

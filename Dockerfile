@@ -27,11 +27,11 @@ USER nopar
 
 # La zona horaria importa: los partes guardan la hora local (LocalDateTime.now()) y los trabajos programados
 # (reseteo nocturno, limpieza de tokens) tienen su propia zona en application.yaml.
-# Las fotos van a /data/uploads: monta ahí un volumen para que sobrevivan a recrear el contenedor.
+# Las fotos van a /data/uploads: monta ahí un volumen para que sobrevivan a recrear el contenedor (docker compose y
+# Railway lo hacen por su cuenta; por eso no se declara VOLUME aquí).
 ENV TZ=Europe/Madrid \
     APPLICATION_STORAGE_LOCATION=/data/uploads \
     JAVA_OPTS="-XX:MaxRAMPercentage=75 -Duser.timezone=Europe/Madrid"
-VOLUME /data/uploads
 EXPOSE 8080
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
