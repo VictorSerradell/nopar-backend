@@ -28,6 +28,7 @@ import com.company.nopar.exception.InvalidStateException;
 import com.company.nopar.exception.ResourceInUseException;
 import com.company.nopar.push.PushSender;
 import com.company.nopar.repository.AnnouncementReadRepository;
+import com.company.nopar.repository.AuditEventRepository;
 import com.company.nopar.repository.AnnouncementRepository;
 import com.company.nopar.repository.DeviceTokenRepository;
 import com.company.nopar.repository.RefreshTokenRepository;
@@ -39,6 +40,7 @@ import com.company.nopar.repository.VehicleReturnRepository;
 import com.company.nopar.repository.WaveCallRepository;
 import com.company.nopar.repository.WaveMessageRepository;
 import com.company.nopar.repository.WaveRepository;
+import com.company.nopar.security.LoginRateLimiter;
 import com.company.nopar.service.AnnouncementService;
 import com.company.nopar.service.DeviceService;
 import com.company.nopar.service.FileStorageService;
@@ -64,6 +66,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -121,7 +124,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Prueba de integración contra un PostgreSQL real levantado con Testcontainers (hace falta Docker en marcha).
  *
  * Lo que no pueden comprobar los tests con mocks:
- * - que Flyway construye el esquema completo (de V1 a V12) sobre una base de datos vacía y que Hibernate
+ * - que Flyway construye el esquema completo (de V1 a V14) sobre una base de datos vacía y que Hibernate
  *   (ddl-auto: validate) acepta ese esquema: si un nombre de columna no coincide, el contexto ni arranca;
  * - que los listados paginados se convierten a respuestas FUERA de la transacción, como hace el controlador con
  *   open-in-view desactivado, sin LazyInitializationException y sin una consulta extra por inspección (N+1);
@@ -198,6 +201,10 @@ class PostgresIntegrationTest {
     @Autowired
     private WaveChatRetention waveChatRetention;
     @Autowired
+    private LoginRateLimiter loginRateLimiter;
+    @Autowired
+    private AuditEventRepository auditEventRepository;
+    @Autowired
     private FileStorageService fileStorageService;
     @Autowired
     private RefreshTokenService refreshTokenService;
@@ -227,6 +234,12 @@ class PostgresIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
+        // Ninguna prueba debe heredar la sesión de otra: el actor del registro de auditoría sale de aquí
+        SecurityContextHolder.clearContext();
+        // Los intentos de login fallidos de unas pruebas no deben bloquear a las siguientes
+        loginRateLimiter.reset();
+        // El registro de auditoría no apunta a nada (guarda nombres), pero cada prueba parte de uno vacío
+        auditEventRepository.deleteAllInBatch();
         // Los mensajes del chat apuntan a olas y usuarios
         waveMessageRepository.deleteAllInBatch();
         // Las llamadas de ola apuntan a olas y usuarios; sus destinatarios se borran con ellas (on delete cascade)
@@ -266,7 +279,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -678,6 +691,7 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/v1/admin/users/{id}/password'].patch").exists())
                 // ...y lista los usuarios para elegir a quién
                 .andExpect(jsonPath("$.paths['/api/v1/admin/users'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/audit'].get").exists())
                 .andExpect(jsonPath("$.components.schemas.ResetPasswordRequest.properties.newPassword").exists())
                 // el alta del parte es multipart y la foto se describe como imagen binaria
                 .andExpect(jsonPath("$.paths['/api/v1/inspections'].post.requestBody.content['multipart/form-data']").exists())
@@ -856,6 +870,121 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void accountActionsAreRecordedWithWhoDidThemAndOnlyAdminsCanReadTheRecord() throws Exception {
+        User boss = userService.createSuperAdmin("jefe", "clave-jefe-123");
+        User driver = userService.createDriver("driver1", "clave-driver-1");
+        String bossAccess = field(login("jefe", "clave-jefe-123").andExpect(status().isOk()), "accessToken");
+        String driverAccess = field(login("driver1", "clave-driver-1").andExpect(status().isOk()), "accessToken");
+        String bossAuth = "Bearer " + bossAccess;
+        String userUrl = "/api/v1/admin/users/" + driver.getId();
+
+        mockMvc.perform(patch(userUrl + "/deactivate").header("Authorization", bossAuth)).andExpect(status().isNoContent());
+        // Repetirlo no deja otra línea
+        mockMvc.perform(patch(userUrl + "/deactivate").header("Authorization", bossAuth)).andExpect(status().isNoContent());
+        mockMvc.perform(patch(userUrl + "/activate").header("Authorization", bossAuth)).andExpect(status().isNoContent());
+        mockMvc.perform(patch(userUrl + "/password").header("Authorization", bossAuth)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"newPassword\": \"clave-nueva-456\"}"))
+                .andExpect(status().isNoContent());
+        // Lo que se rechaza no deja rastro
+        mockMvc.perform(patch("/api/v1/admin/users/" + boss.getId() + "/deactivate").header("Authorization", bossAuth))
+                .andExpect(status().isBadRequest());
+
+        // Del más reciente al más antiguo: lo del arranque (aquí, el alta, sin sesión) lo firma el sistema
+        mockMvc.perform(get("/api/v1/admin/audit").header("Authorization", bossAuth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(5))
+                .andExpect(jsonPath("$.content[0].action").value("PASSWORD_RESET"))
+                .andExpect(jsonPath("$.content[0].actorUsername").value("jefe"))
+                .andExpect(jsonPath("$.content[0].targetUsername").value("driver1"))
+                .andExpect(jsonPath("$.content[0].targetUserId").value(driver.getId()))
+                .andExpect(jsonPath("$.content[0].detail").value("rol DRIVER"))
+                .andExpect(jsonPath("$.content[1].action").value("USER_ACTIVATED"))
+                .andExpect(jsonPath("$.content[1].actorUsername").value("jefe"))
+                .andExpect(jsonPath("$.content[2].action").value("USER_DEACTIVATED"))
+                .andExpect(jsonPath("$.content[2].actorUsername").value("jefe"))
+                .andExpect(jsonPath("$.content[3].action").value("USER_CREATED"))
+                .andExpect(jsonPath("$.content[3].targetUsername").value("driver1"))
+                .andExpect(jsonPath("$.content[3].actorUsername").value("sistema"))
+                .andExpect(jsonPath("$.content[4].action").value("USER_CREATED"))
+                .andExpect(jsonPath("$.content[4].detail").value("rol ADMIN (super administrador)"))
+                // Nunca contraseñas ni hashes
+                .andExpect(jsonPath("$..password").isEmpty());
+
+        // Se pagina
+        mockMvc.perform(get("/api/v1/admin/audit").param("size", "2").param("page", "1").header("Authorization", bossAuth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(2))
+                .andExpect(jsonPath("$.content[0].action").value("USER_DEACTIVATED"))
+                .andExpect(jsonPath("$.totalPages").value(3));
+
+        // Sin sesión no se ve, un conductor tampoco
+        mockMvc.perform(get("/api/v1/admin/audit")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/admin/audit").header("Authorization", "Bearer " + driverAccess))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void anAdminChangingHisOwnPasswordIsAuditedAsBothActorAndTarget() throws Exception {
+        userService.createUser("admin1", "clave-vieja-123", User.Role.ADMIN);
+        String access = field(login("admin1", "clave-vieja-123").andExpect(status().isOk()), "accessToken");
+
+        mockMvc.perform(patch("/api/v1/auth/password").header("Authorization", "Bearer " + access)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\": \"clave-vieja-123\", \"newPassword\": \"clave-nueva-456\"}"))
+                .andExpect(status().isOk());
+
+        String newAccess = field(login("admin1", "clave-nueva-456").andExpect(status().isOk()), "accessToken");
+        mockMvc.perform(get("/api/v1/admin/audit").header("Authorization", "Bearer " + newAccess))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].action").value("PASSWORD_CHANGED"))
+                .andExpect(jsonPath("$.content[0].actorUsername").value("admin1"))
+                .andExpect(jsonPath("$.content[0].targetUsername").value("admin1"));
+    }
+
+    @Test
+    void tooManyWrongPasswordsBlockTheLoginOfThatUserFromThatIpOnlyAndForAWhile() throws Exception {
+        userService.createDriver("driver1", "clave-driver-1");
+        userService.createDriver("driver2", "clave-driver-2");
+
+        // 5 contraseñas equivocadas seguidas: 401 cada vez
+        for (int i = 0; i < 5; i++) {
+            login("driver1", "equivocada-" + i).andExpect(status().isUnauthorized());
+        }
+
+        // La sexta ya no llega a comprobarse, aunque sea la buena: 429 con Retry-After y el motivo
+        login("driver1", "clave-driver-1")
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists("Retry-After"))
+                .andExpect(jsonPath("$.detail").value("Demasiados intentos fallidos. Vuelve a intentarlo en 15 minutos."));
+        // Otro usuario desde la misma IP puede entrar, y el mismo usuario desde otra IP también
+        login("driver2", "clave-driver-2").andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(request -> {
+                            request.setRemoteAddr("10.20.30.40");
+                            return request;
+                        })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\": \"driver1\", \"password\": \"clave-driver-1\"}"))
+                .andExpect(status().isOk());
+
+        // Pasado el bloqueo (aquí, olvidando los contadores) vuelve a entrar con su contraseña
+        loginRateLimiter.reset();
+        login("driver1", "clave-driver-1").andExpect(status().isOk());
+    }
+
+    @Test
+    void aSuccessfulLoginClearsTheFailedAttemptsOfThatUser() throws Exception {
+        userService.createDriver("driver1", "clave-driver-1");
+
+        for (int round = 0; round < 3; round++) {
+            for (int i = 0; i < 4; i++) {
+                login("driver1", "equivocada").andExpect(status().isUnauthorized());
+            }
+            login("driver1", "clave-driver-1").andExpect(status().isOk());
+        }
+    }
+
+    @Test
     void onlyAnAdminCanBeSuperAdminInTheDatabase() {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         User manager = saveUser("encargado1", User.Role.MANAGER);
@@ -930,7 +1059,7 @@ class PostgresIntegrationTest {
 
         // El historial se conserva: la cuenta sigue ahí y su parte también (solo pierde el enlace al turno que se quitó)
         assertThat(jdbc.queryForObject("select enabled from users where id = ?", Boolean.class, driver.getId())).isFalse();
-        assertThat(jdbc.queryForObject("select count(*) from vehicle_inspections where driver_id = ?", Long.class,
+        assertThat(jdbc.queryForObject("select count(*) from vehicle_inspections where user_id = ?", Long.class,
                 driver.getId())).isEqualTo(1L);
         assertThat(jdbc.queryForList("select shift_id from vehicle_inspections where id = ?", Long.class,
                 report.getId())).hasSize(1).containsOnlyNulls();

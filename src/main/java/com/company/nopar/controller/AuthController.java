@@ -7,11 +7,13 @@ import com.company.nopar.dto.TokenResponse;
 import com.company.nopar.entity.User;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.security.JwtService;
+import com.company.nopar.security.LoginRateLimiter;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +21,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -33,17 +36,27 @@ public class AuthController {
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final UserService userService;
+    private final LoginRateLimiter loginRateLimiter;
 
     @Operation(summary = "Inicia sesión",
-            description = "Devuelve un access token (15 minutos) y un refresh token (7 días). No requiere autenticación.")
+            description = "Devuelve un access token (15 minutos) y un refresh token (7 días). No requiere autenticación. Tras varios intentos fallidos se bloquea el inicio de sesión un rato (429 con Retry-After).")
     @ApiResponse(responseCode = "401", description = "Credenciales inválidas")
+    @ApiResponse(responseCode = "429", description = "Demasiados intentos fallidos: hay que esperar (cabecera Retry-After, en segundos)")
     @PostMapping("/login")
-    public ResponseEntity<TokenResponse> authenticateUser(@RequestBody AuthRequest request) {
-        authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.username(), request.password())
-        );
+    public ResponseEntity<TokenResponse> authenticateUser(@RequestBody AuthRequest request, HttpServletRequest httpRequest) {
+        String ip = httpRequest.getRemoteAddr();
+        loginRateLimiter.checkAllowed(request.username(), ip);
+        try {
+            authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.username(), request.password())
+            );
+        } catch (AuthenticationException ex) {
+            loginRateLimiter.recordFailure(request.username(), ip);
+            throw ex;
+        }
         var user = userRepository.findByUsername(request.username())
                 .orElseThrow(() -> new BadCredentialsException("Credenciales inválidas"));
+        loginRateLimiter.recordSuccess(request.username(), ip);
 
         var accessToken = jwtService.generateToken(user);
         var refreshToken = refreshTokenService.createRefreshToken(user);

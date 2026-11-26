@@ -1,5 +1,8 @@
 server:
   port: 8080
+  # Detrás de un proxy inverso (Caddy, ver docker-compose) la IP real del cliente llega en X-Forwarded-For; sin esto
+  # el límite de intentos de login vería siempre la IP del proxy. Solo se aceptan esas cabeceras de proxies internos
+  forward-headers-strategy: native
 
 spring:
   config:
@@ -87,6 +90,14 @@ application:
       # Cron de 6 campos (segundos incluidos) en la zona indicada; "-" lo desactiva
       cron: "0 30 3 * * *"
       zone: Europe/Madrid
+    login-rate-limit:
+      # Frena la prueba de contraseñas: tras max-attempts fallos de un usuario desde una IP (o max-attempts-per-account
+      # desde cualquiera, o max-attempts-per-ip de una IP) se bloquea el login window-minutes minutos (429)
+      enabled: ${LOGIN_RATE_LIMIT_ENABLED:true}
+      max-attempts: 5
+      max-attempts-per-account: 20
+      max-attempts-per-ip: 50
+      window-minutes: 15
     cors:
       # Orígenes desde los que el cliente web puede llamar a la API, separados por comas (admite patrones como
       # http://localhost:*). Vacío = ninguno. Android e iOS no lo necesitan

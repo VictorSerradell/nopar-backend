@@ -30,10 +30,41 @@ Con `FCM_ENABLED=true` y el JSON de Firebase en `./secrets/firebase-service-acco
 
 Se guardan en volúmenes de Docker: `db-data` (base de datos), `uploads` (fotos de partes y del chat) y `caddy-data` (certificados). `docker compose down` los conserva; `docker compose down -v` los BORRA.
 
-- Copia de seguridad de la base de datos: `docker compose exec -T db pg_dump -U postgres fleet_db > copia-$(date +%F).sql`
-- Restaurar en una base vacía: `docker compose exec -T db psql -U postgres fleet_db < copia.sql`
-- Las fotos están en el volumen `uploads` (`docker volume inspect` te dice dónde): inclúyelo en la copia.
 - Los mensajes del chat y sus fotos se borran solos a los 30 días (`CHAT_RETENTION_DAYS`; `0` los conserva siempre).
+
+## Seguridad de las cuentas
+
+- **Intentos de login:** tras 5 contraseñas equivocadas de un mismo usuario desde una misma IP, ese usuario queda bloqueado 15 minutos en esa IP (la app muestra cuánto esperar); también se frena a quien prueba un mismo usuario desde muchas IP (20 fallos) o muchos usuarios desde una IP (50 fallos). Lo borra un inicio de sesión correcto. Los contadores viven en memoria: reiniciar el backend los borra. `LOGIN_RATE_LIMIT_ENABLED=false` lo apaga (solo para depurar).
+- **Auditoría:** altas, desactivaciones, reactivaciones, cambios y restablecimientos de contraseña y ascensos a super administrador quedan anotados con quién lo hizo y sobre quién (`GET /api/v1/admin/audit`, solo administradores, solo lectura). Se conserva siempre y va incluida en la copia de seguridad de la base de datos.
+
+## Copias de seguridad
+
+Con el perfil `backup` se hacen solas: `docker compose --profile backup up -d` (con HTTPS: `docker compose --profile https --profile backup up -d`).
+
+- Al arrancar y después cada 24 horas (`BACKUP_EVERY_HOURS`) se guardan en `./backups` la base de datos (`db-AAAA-MM-DD_HHMM.dump`) y las fotos (`uploads-AAAA-MM-DD_HHMM.tar.gz`). Se borran las de más de 14 días (`BACKUP_KEEP_DAYS`).
+- Comprueba que funciona: `docker compose logs backup` debe decir `base de datos: OK` y `fotos: OK`, y deben aparecer los dos ficheros en `./backups`.
+- **Copia `./backups` fuera del servidor** (otro equipo, almacenamiento en la nube): si el servidor se pierde, las copias que están en él se pierden también.
+- Copia manual puntual de la base de datos (sin redirecciones `>` ni `<`, que en PowerShell estropean los ficheros binarios):
+  ```
+  docker compose exec db pg_dump -U postgres -d fleet_db -Fc -f /tmp/copia.dump
+  docker compose cp db:/tmp/copia.dump ./copia.dump
+  ```
+
+### Restaurar
+
+Con la API parada, para no escribir mientras se restaura:
+
+```
+docker compose stop api
+# base de datos (borra lo que haya y deja lo de la copia)
+docker compose cp backups/db-AAAA-MM-DD_HHMM.dump db:/tmp/restaurar.dump
+docker compose exec db pg_restore -U postgres -d fleet_db --clean --if-exists --no-owner /tmp/restaurar.dump
+# fotos (opcional, si también se perdieron)
+docker compose run --rm --no-deps -v ./backups:/backups:ro --entrypoint sh api -c "tar xzf /backups/uploads-AAAA-MM-DD_HHMM.tar.gz -C /data/uploads"
+docker compose start api
+```
+
+Ensaya la restauración una vez en un servidor de pruebas antes de necesitarla: una copia que nunca se ha restaurado es una suposición.
 
 ## Actualizar
 
@@ -58,5 +89,5 @@ Sin ella, `assembleRelease` y `bundleRelease` se niegan a compilar para no publi
 - [ ] `OPENAPI_ENABLED=false` y `SHOW_SQL=false`.
 - [ ] `JWT_SECRET` y `DB_PASSWORD` propios, y el `.env` fuera del repositorio.
 - [ ] Puerto 8080 cerrado hacia fuera (solo 80 y 443).
-- [ ] Copia de seguridad programada (por ejemplo con `cron` y el `pg_dump` de arriba).
+- [ ] Perfil `backup` activo, `./backups` copiado fuera del servidor y una restauración ensayada.
 - [ ] `CORS_ALLOWED_ORIGINS` vacío mientras no haya cliente web.

@@ -10,6 +10,7 @@
 .env.*
 target
 uploads
+backups
 secrets
 *-firebase-adminsdk-*.json
 HELP.md

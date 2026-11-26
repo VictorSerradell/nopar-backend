@@ -3,8 +3,10 @@ package com.company.nopar.controller;
 import com.company.nopar.dto.AuthRequest;
 import com.company.nopar.entity.User;
 import com.company.nopar.exception.InvalidRefreshTokenException;
+import com.company.nopar.exception.TooManyLoginAttemptsException;
 import com.company.nopar.repository.UserRepository;
 import com.company.nopar.security.JwtService;
+import com.company.nopar.security.LoginRateLimiter;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.RefreshTokenService.IssuedRefreshToken;
 import com.company.nopar.service.UserService;
@@ -20,14 +22,17 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -57,6 +62,9 @@ class AuthControllerTest {
     // AuthEndpointsSecurityTest; aquí no hay filtros, así que solo hace falta el bean para que el contexto arranque
     @MockitoBean
     private UserService userService;
+
+    @MockitoBean
+    private LoginRateLimiter loginRateLimiter;
 
     @Test
     void testLoginSuccess() throws Exception {
@@ -93,6 +101,55 @@ class AuthControllerTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.title").value("No autorizado"));
+    }
+
+    @Test
+    void givenABadPassword_whenLogin_thenTheFailureIsCounted() throws Exception {
+        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
+                .thenThrow(new BadCredentialsException("Bad credentials"));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new AuthRequest("conductor1", "mala"))))
+                .andExpect(status().isUnauthorized());
+
+        verify(loginRateLimiter).recordFailure(org.mockito.ArgumentMatchers.eq("conductor1"), any());
+        verify(loginRateLimiter, never()).recordSuccess(any(), any());
+    }
+
+    @Test
+    void givenAValidLogin_whenLogin_thenTheCounterOfThatUserIsCleared() throws Exception {
+        when(userRepository.findByUsername("conductor1")).thenReturn(Optional.of(driver()));
+        when(jwtService.generateToken(any(User.class))).thenReturn("access");
+        when(refreshTokenService.createRefreshToken(any(User.class)))
+                .thenReturn(new IssuedRefreshToken("refresh", driver()));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new AuthRequest("conductor1", "password123"))))
+                .andExpect(status().isOk());
+
+        verify(loginRateLimiter).recordSuccess(org.mockito.ArgumentMatchers.eq("conductor1"), any());
+        verify(loginRateLimiter, never()).recordFailure(any(), any());
+    }
+
+    @Test
+    void givenTooManyFailedAttempts_whenLogin_thenTooManyRequestsWithRetryAfterAndNobodyIsAuthenticated() throws Exception {
+        doThrow(new TooManyLoginAttemptsException(Duration.ofSeconds(125)))
+                .when(loginRateLimiter).checkAllowed(org.mockito.ArgumentMatchers.eq("conductor1"), any());
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new AuthRequest("conductor1", "password123"))))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "125"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.title").value("Demasiados intentos"))
+                .andExpect(jsonPath("$.detail").value("Demasiados intentos fallidos. Vuelve a intentarlo en 3 minutos."));
+
+        // Bloqueado: ni siquiera se comprueba la contraseña (así tampoco se puede seguir adivinando)
+        verifyNoInteractions(authenticationManager);
+        verify(loginRateLimiter, never()).recordFailure(any(), any());
     }
 
     @Test

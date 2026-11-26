@@ -8,6 +8,8 @@ target/
 /out/
 .env
 uploads/
+# Copias de seguridad generadas por el servicio backup de docker-compose
+backups/
 # Credenciales de Firebase (notificaciones push): nunca al repositorio
 secrets/
 *-firebase-adminsdk-*.json

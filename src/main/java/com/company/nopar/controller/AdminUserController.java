@@ -58,6 +58,7 @@ public class AdminUserController {
 
     @Operation(summary = "Desactiva una cuenta",
             description = "Solo un super administrador. La cuenta conserva todo su historial, pero ya no puede iniciar sesión: se cierran sus sesiones, se dan de baja sus dispositivos push y, si es un conductor, se le quitan los turnos de hoy y de días futuros sin avisarle. Repetirlo sobre una cuenta ya desactivada no hace nada.")
+    @ApiResponse(responseCode = "204", description = "Cuenta desactivada (o ya lo estaba)")
     @ApiResponse(responseCode = "400", description = "Es tu propia cuenta o la de otro super administrador")
     @ApiResponse(responseCode = "403", description = "Quien lo pide no es super administrador")
     @ApiResponse(responseCode = "404", description = "No existe ese usuario")
@@ -69,6 +70,7 @@ public class AdminUserController {
 
     @Operation(summary = "Reactiva una cuenta desactivada",
             description = "Solo un super administrador. La cuenta vuelve a poder iniciar sesión con su contraseña; no recupera los turnos que se le quitaron al desactivarla.")
+    @ApiResponse(responseCode = "204", description = "Cuenta reactivada (o ya estaba activa)")
     @ApiResponse(responseCode = "403", description = "Quien lo pide no es super administrador")
     @ApiResponse(responseCode = "404", description = "No existe ese usuario")
     @PatchMapping("/{id}/activate")
@@ -79,6 +81,7 @@ public class AdminUserController {
 
     @Operation(summary = "Restablece la contraseña de un conductor o de un encargado",
             description = "Para quien ha olvidado la suya: no exige la contraseña actual y cierra todas sus sesiones (revoca sus refresh tokens y da de baja sus dispositivos push). Vale para conductores y encargados; los administradores cambian la suya con PATCH /api/v1/auth/password.")
+    @ApiResponse(responseCode = "204", description = "Contraseña restablecida y sesiones cerradas")
     @ApiResponse(responseCode = "400", description = "El usuario no es un conductor ni un encargado, o la nueva contraseña no es válida")
     @ApiResponse(responseCode = "404", description = "No existe ese usuario")
     @PatchMapping("/{id}/password")

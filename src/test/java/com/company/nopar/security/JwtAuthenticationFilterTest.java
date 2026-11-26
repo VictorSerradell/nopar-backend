@@ -132,9 +132,14 @@ class JwtAuthenticationFilterTest {
         String superToken = jwtService.generateToken(superAdmin);
         String adminToken = jwtService.generateToken(admin);
 
-        assertThat(jwtService.extractClaim(superToken, claims -> claims.get("superAdmin", Boolean.class))).isTrue();
-        assertThat(jwtService.extractClaim(adminToken, claims -> claims.get("superAdmin"))).isNull();
-        assertThat(jwtService.extractClaim(superToken, claims -> claims.get("roles"))).isEqualTo(java.util.List.of("ROLE_ADMIN"));
+        // Con tipos explícitos: assertThat(extractClaim(...)) deja T sin fijar y javac no sabe qué sobrecarga elegir
+        Boolean superClaim = jwtService.extractClaim(superToken, claims -> claims.get("superAdmin", Boolean.class));
+        Object adminClaim = jwtService.extractClaim(adminToken, claims -> claims.get("superAdmin"));
+        Object superRoles = jwtService.extractClaim(superToken, claims -> claims.get("roles"));
+
+        assertThat(superClaim).isTrue();
+        assertThat(adminClaim).isNull();
+        assertThat(superRoles).isEqualTo(java.util.List.of("ROLE_ADMIN"));
     }
 
     @Test

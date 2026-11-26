@@ -1,5 +1,6 @@
 package com.company.nopar.service;
 
+import com.company.nopar.entity.AuditEvent;
 import com.company.nopar.entity.User;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.InvalidRequestException;
@@ -29,6 +30,7 @@ public class UserService {
     private final RefreshTokenService refreshTokenService;
     private final DeviceService deviceService;
     private final ShiftService shiftService;
+    private final AuditService auditService;
 
     /**
      * Todos los usuarios, por nombre sin distinguir mayúsculas, para que un administrador elija a quién restablecer la
@@ -72,8 +74,16 @@ public class UserService {
         if (user.getRole() != User.Role.ADMIN) {
             throw new InvalidRequestException("El usuario " + username + " no es administrador");
         }
+        boolean wasSuperAdmin = user.isSuperAdmin();
+        boolean wasEnabled = user.isEnabled();
         user.setSuperAdmin(true);
         user.setEnabled(true);
+        if (!wasSuperAdmin) {
+            auditService.record(AuditEvent.Action.SUPER_ADMIN_GRANTED, user, null);
+        }
+        if (!wasEnabled) {
+            auditService.record(AuditEvent.Action.USER_ACTIVATED, user, "rol " + user.getRole());
+        }
         return user;
     }
 
@@ -106,6 +116,7 @@ public class UserService {
         if (user.getRole() == User.Role.DRIVER) {
             shiftService.deleteShiftsOfDriverFrom(user.getId(), LocalDate.now());
         }
+        auditService.record(AuditEvent.Action.USER_DEACTIVATED, actor, user, "rol " + user.getRole());
     }
 
     /** Reactiva una cuenta desactivada: puede volver a iniciar sesión con su contraseña. No devuelve los turnos que se le quitaron. */
@@ -114,7 +125,10 @@ public class UserService {
         requireSuperAdmin(actor);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
-        user.setEnabled(true);
+        if (!user.isEnabled()) {
+            user.setEnabled(true);
+            auditService.record(AuditEvent.Action.USER_ACTIVATED, actor, user, "rol " + user.getRole());
+        }
     }
 
     private static void requireSuperAdmin(User actor) {
@@ -135,12 +149,16 @@ public class UserService {
         user.setRole(role);
         user.setSuperAdmin(superAdmin);
 
+        User saved;
         try {
-            return userRepository.saveAndFlush(user);
+            saved = userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException ex) {
             // Otra petición creó el mismo usuario entre la comprobación y el guardado
             throw new DuplicateResourceException("Ya existe un usuario con el nombre: " + username);
         }
+        // Fuera del try: un fallo al anotar no debe confundirse con un nombre repetido
+        auditService.record(AuditEvent.Action.USER_CREATED, saved, "rol " + role + (superAdmin ? " (super administrador)" : ""));
+        return saved;
     }
 
     /**
@@ -179,6 +197,7 @@ public class UserService {
         refreshTokenService.deleteByUser(user.getUsername());
         deviceService.unregisterAllDevices(user.getId());
         user.setPassword(newHash);
+        auditService.record(AuditEvent.Action.PASSWORD_CHANGED, user, user, null);
         return user;
     }
 
@@ -201,6 +220,7 @@ public class UserService {
         refreshTokenService.deleteByUser(user.getUsername());
         deviceService.unregisterAllDevices(user.getId());
         user.setPassword(newHash);
+        auditService.record(AuditEvent.Action.PASSWORD_RESET, user, "rol " + user.getRole());
     }
 
     private static boolean exceedsBcryptLimit(String password) {

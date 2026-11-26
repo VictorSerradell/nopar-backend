@@ -1,5 +1,6 @@
 package com.company.nopar.service;
 
+import com.company.nopar.entity.AuditEvent;
 import com.company.nopar.entity.User;
 import com.company.nopar.exception.DuplicateResourceException;
 import com.company.nopar.exception.InvalidRequestException;
@@ -24,6 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -46,6 +49,9 @@ class UserServiceTest {
 
     @Mock
     private ShiftService shiftService;
+
+    @Mock
+    private AuditService auditService;
 
     @InjectMocks
     private UserService userService;
@@ -395,6 +401,174 @@ class UserServiceTest {
                 .isInstanceOf(AccessDeniedException.class);
 
         verifyNoInteractions(userRepository);
+    }
+
+    // ------------------------------------------------------------------ registro de auditoría
+
+    @Test
+    void whenCreateADriver_thenTheCreationIsAudited() {
+        when(passwordEncoder.encode("password-segura-123")).thenReturn("$2a$10$hash");
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        User created = userService.createDriver("conductor2", "password-segura-123");
+
+        verify(auditService).record(AuditEvent.Action.USER_CREATED, created, "rol DRIVER");
+    }
+
+    @Test
+    void whenCreateASuperAdmin_thenTheAuditSaysSo() {
+        when(passwordEncoder.encode("password-segura-123")).thenReturn("$2a$10$hash");
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        User created = userService.createSuperAdmin("jefe", "password-segura-123");
+
+        verify(auditService).record(AuditEvent.Action.USER_CREATED, created, "rol ADMIN (super administrador)");
+    }
+
+    @Test
+    void givenAnExistingUsername_whenCreateDriver_thenNothingIsAudited() {
+        when(userRepository.existsByUsername("conductor1")).thenReturn(true);
+
+        assertThatThrownBy(() -> userService.createDriver("conductor1", "password-segura-123"))
+                .isInstanceOf(DuplicateResourceException.class);
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void givenUsernameTakenByAConcurrentRequest_whenCreateDriver_thenNothingIsAudited() {
+        when(userRepository.saveAndFlush(any(User.class)))
+                .thenThrow(new DataIntegrityViolationException("unique constraint"));
+
+        assertThatThrownBy(() -> userService.createDriver("conductor2", "password-segura-123"))
+                .isInstanceOf(DuplicateResourceException.class);
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void whenASuperAdminDeactivatesAUser_thenItIsAuditedWithHimAsTheActor() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        User boss = superAdmin(1L);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.deactivateUser(7L, boss);
+
+        verify(auditService).record(AuditEvent.Action.USER_DEACTIVATED, boss, driver, "rol DRIVER");
+    }
+
+    @Test
+    void givenAnAlreadyDeactivatedUser_whenDeactivateAgain_thenItIsNotAuditedAgain() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        driver.setEnabled(false);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.deactivateUser(7L, superAdmin(1L));
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void givenADeniedDeactivation_thenNothingIsAudited() {
+        User plainAdmin = existingUser("admin2", "$2a$10$hash");
+        plainAdmin.setRole(User.Role.ADMIN);
+
+        assertThatThrownBy(() -> userService.deactivateUser(7L, plainAdmin)).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> userService.activateUser(7L, plainAdmin)).isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void whenASuperAdminActivatesADeactivatedUser_thenItIsAudited() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        driver.setEnabled(false);
+        User boss = superAdmin(1L);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.activateUser(7L, boss);
+
+        verify(auditService).record(AuditEvent.Action.USER_ACTIVATED, boss, driver, "rol DRIVER");
+    }
+
+    @Test
+    void givenAnActiveUser_whenActivate_thenNothingIsAudited() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.activateUser(7L, superAdmin(1L));
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void whenAUserChangesHisPassword_thenItIsAuditedWithHimAsTheActor() {
+        User user = existingManager("encargado1", "$2a$10$viejo");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("clave-vieja-123", "$2a$10$viejo")).thenReturn(true);
+        when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
+
+        userService.changePassword(7L, "clave-vieja-123", "clave-nueva-456");
+
+        verify(auditService).record(eq(AuditEvent.Action.PASSWORD_CHANGED), same(user), same(user), isNull());
+    }
+
+    @Test
+    void givenAWrongCurrentPassword_whenChangePassword_thenNothingIsAudited() {
+        User user = existingManager("encargado1", "$2a$10$viejo");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("equivocada-123", "$2a$10$viejo")).thenReturn(false);
+
+        assertThatThrownBy(() -> userService.changePassword(7L, "equivocada-123", "clave-nueva-456"))
+                .isInstanceOf(InvalidRequestException.class);
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void whenAnAdminResetsAPassword_thenItIsAudited() {
+        User driver = existingUser("conductor1", "$2a$10$olvidada");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+        when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
+
+        userService.resetPassword(7L, "clave-nueva-456");
+
+        verify(auditService).record(AuditEvent.Action.PASSWORD_RESET, driver, "rol DRIVER");
+    }
+
+    @Test
+    void givenAnAdminAsTarget_whenResetPassword_thenNothingIsAudited() {
+        User admin = existingUser("admin", "$2a$10$hash");
+        admin.setRole(User.Role.ADMIN);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> userService.resetPassword(7L, "clave-nueva-456"))
+                .isInstanceOf(InvalidRequestException.class);
+
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void givenAnAdminThatWasDisabled_whenPromoteToSuperAdmin_thenBothChangesAreAudited() {
+        User admin = existingUser("admin", "$2a$10$intacta");
+        admin.setRole(User.Role.ADMIN);
+        admin.setEnabled(false);
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+
+        userService.promoteToSuperAdmin("admin");
+
+        verify(auditService).record(AuditEvent.Action.SUPER_ADMIN_GRANTED, admin, null);
+        verify(auditService).record(AuditEvent.Action.USER_ACTIVATED, admin, "rol ADMIN");
+    }
+
+    @Test
+    void givenAnActiveSuperAdmin_whenPromoteAgain_thenNothingIsAudited() {
+        User boss = superAdmin(1L);
+        when(userRepository.findByUsername("jefe")).thenReturn(Optional.of(boss));
+
+        userService.promoteToSuperAdmin("jefe");
+
+        verifyNoInteractions(auditService);
     }
 
     private static User superAdmin(Long id) {

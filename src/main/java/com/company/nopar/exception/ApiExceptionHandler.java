@@ -1,8 +1,10 @@
 package com.company.nopar.exception;
 
 import org.springframework.context.MessageSourceResolvable;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -32,6 +34,18 @@ public class ApiExceptionHandler {
     public ProblemDetail handleAuthentication(AuthenticationException ex) {
         // Mensaje fijo: no se revela si falló el usuario o la contraseña
         return problem(HttpStatus.UNAUTHORIZED, "No autorizado", "Credenciales inválidas");
+    }
+
+    /** 429 con Retry-After (segundos); el detalle dice cuántos minutos esperar y la app lo enseña tal cual. */
+    @ExceptionHandler(TooManyLoginAttemptsException.class)
+    public ResponseEntity<ProblemDetail> handleTooManyLoginAttempts(TooManyLoginAttemptsException ex) {
+        long seconds = Math.max(1, ex.getRetryAfter().toSeconds() + (ex.getRetryAfter().toNanosPart() > 0 ? 1 : 0));
+        long minutes = (seconds + 59) / 60;
+        ProblemDetail problem = problem(HttpStatus.TOO_MANY_REQUESTS, "Demasiados intentos",
+                "Demasiados intentos fallidos. Vuelve a intentarlo en " + minutes + (minutes == 1 ? " minuto." : " minutos."));
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(seconds))
+                .body(problem);
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)

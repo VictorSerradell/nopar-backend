@@ -57,6 +57,9 @@ class AuthEndpointsSecurityTest {
     @MockitoBean
     private UserService userService;
 
+    @MockitoBean
+    private LoginRateLimiter loginRateLimiter;
+
     @Test
     void givenNoAccessToken_whenLogout_thenNoContentAndTheRefreshTokenIsRevoked() throws Exception {
         mockMvc.perform(post("/api/v1/auth/logout")
