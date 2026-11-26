@@ -5,8 +5,13 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -38,4 +43,32 @@ public interface VehicleInspectionRepository extends JpaRepository<VehicleInspec
     Optional<VehicleInspection> findFirstByVehicleIdOrderByInspectionDateDescIdDesc(Long vehicleId);
 
     boolean existsByVehicleId(Long vehicleId);
+
+    // ---- Retención de fotos: primero se leen los ficheros, después se quitan de las filas y por último se borran del disco
+
+    /** Los ficheros de la foto del cuentakilómetros de los partes anteriores a una fecha. */
+    @Query("select i.odometerPhotoPath from VehicleInspection i "
+            + "where i.inspectionDate < :cutoff and i.odometerPhotoPath is not null")
+    List<String> findOdometerPhotoFilesBefore(@Param("cutoff") LocalDateTime cutoff);
+
+    /** Los ficheros de la foto de la baliza V16 de los partes anteriores a una fecha. */
+    @Query("select i.beaconPhotoPath from VehicleInspection i "
+            + "where i.inspectionDate < :cutoff and i.beaconPhotoPath is not null")
+    List<String> findBeaconPhotoFilesBefore(@Param("cutoff") LocalDateTime cutoff);
+
+    /** Los ficheros de la foto exterior de los partes anteriores a una fecha. */
+    @Query("select i.exteriorPhotosPath from VehicleInspection i "
+            + "where i.inspectionDate < :cutoff and i.exteriorPhotosPath is not null")
+    List<String> findExteriorPhotoFilesBefore(@Param("cutoff") LocalDateTime cutoff);
+
+    /**
+     * Quita las fotos de los partes anteriores a una fecha. El parte y el resto de sus datos se conservan. Devuelve
+     * cuántos partes tenían alguna foto.
+     */
+    @Modifying
+    @Query("update VehicleInspection i "
+            + "set i.odometerPhotoPath = null, i.beaconPhotoPath = null, i.exteriorPhotosPath = null "
+            + "where i.inspectionDate < :cutoff "
+            + "and (i.odometerPhotoPath is not null or i.beaconPhotoPath is not null or i.exteriorPhotosPath is not null)")
+    int clearPhotosBefore(@Param("cutoff") LocalDateTime cutoff);
 }

@@ -67,6 +67,14 @@ application:
       days: ${CHAT_RETENTION_DAYS:30}
       cron: "0 45 3 * * *"
       zone: Europe/Madrid
+  inspection:
+    photo-retention:
+      # Las fotos de los partes de hace más de estos días se borran solas cada noche; el parte y sus datos se
+      # conservan (INSPECTION_PHOTO_RETENTION_DAYS=0 lo desactiva y conserva todas). Cron de 6 campos (segundos
+      # incluidos) en la zona indicada; "-" también lo desactiva
+      days: ${INSPECTION_PHOTO_RETENTION_DAYS:365}
+      cron: "0 15 4 * * *"
+      zone: Europe/Madrid
   fleet:
     nightly-reset:
       # Red de seguridad: a esta hora los vehículos que siguen IN_USE (nadie los devolvió) pasan a AVAILABLE.

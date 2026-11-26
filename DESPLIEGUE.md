@@ -31,6 +31,7 @@ Con `FCM_ENABLED=true` y el JSON de Firebase en `./secrets/firebase-service-acco
 Se guardan en volúmenes de Docker: `db-data` (base de datos), `uploads` (fotos de partes y del chat) y `caddy-data` (certificados). `docker compose down` los conserva; `docker compose down -v` los BORRA.
 
 - Los mensajes del chat y sus fotos se borran solos a los 30 días (`CHAT_RETENTION_DAYS`; `0` los conserva siempre).
+- Las fotos de los partes de vehículo (cuentakilómetros, baliza y exteriores) se borran solas a los 12 meses (`INSPECTION_PHOTO_RETENTION_DAYS=365`; `0` las conserva siempre). Cada noche, a las 04:15 (hora de Madrid), se quitan las fotos de los partes con más de 365 días. El parte no se borra: kilómetros, daños y estado se conservan; solo desaparecen las imágenes (la API devuelve 404 al pedirlas). Para quedarte con una foto concreta (por ejemplo, un daño en disputa), descárgala antes de que cumpla el año.
 
 ## Seguridad de las cuentas
 
@@ -96,7 +97,8 @@ Alternativa al servidor propio: Railway ejecuta la API y PostgreSQL y da HTTPS s
 | `RAILWAY_RUN_UID` | `0`: la imagen se ejecuta con un usuario sin privilegios y, sin esto, no puede escribir en el volumen |
 | `JAVA_OPTS` | `-Xms128m -Xmx384m -XX:+UseSerialGC -Duser.timezone=Europe/Madrid`: limita la memoria de la JVM, que Railway cobra por uso. Empieza así y vigila *Metrics* |
 | `SERVER_TOMCAT_REMOTEIP_REMOTE_IP_HEADER` | `X-Real-IP`: Railway pasa ahí la IP del cliente. Sin esta variable la API ve la de un proxy de Railway y el límite de intentos de login cuenta por ella (ver «IP real y límite de intentos de login») |
-| `FCM_ENABLED`, `FCM_CREDENTIALS_JSON` | Notificaciones push: el JSON de Firebase en Base64 (ver `.env.example`) |
+| `FCM_ENABLED`, `FCM_CREDENTIALS_JSON` | Notificaciones push: ver «Notificaciones push en Railway» |
+| `INSPECTION_PHOTO_RETENTION_DAYS` | Opcional. Días que se conservan las fotos de los partes; sin definir, 365. `0` las conserva siempre |
 
    La API ya escucha en el `PORT` que Railway inyecta. `CORS_ALLOWED_ORIGINS` déjala sin definir mientras no haya cliente web.
 4. Volumen para las fotos: clic derecho en el lienzo del proyecto → *Volume* → conéctalo a la API con ruta de montaje `/data/uploads`. Empieza con 20 GB: se puede ampliar en caliente, pero no reducir.
@@ -127,6 +129,41 @@ docker run --rm -v "${PWD}:/out" postgres:18-alpine pg_dump "URL_PUBLICA" -Fc -f
   Para restaurar ese fichero, sigue «Restaurar» de la sección de copias de seguridad, apuntando a la base de datos de destino.
 - Las fotos solo están en el volumen de Railway y en sus copias; si quieres una copia propia, hay que bajarlas aparte.
 
+### Notificaciones push en Railway
+
+Los conductores dependen de los avisos de ola, así que las push tienen que estar activas en producción. Sin ellas la API funciona, pero no llega nada al móvil con la app cerrada.
+
+1. Firebase → proyecto **Nopar** → *Configuración del proyecto* → *Cuentas de servicio* → *Generar nueva clave privada*. Se descarga un JSON. Guárdalo fuera del repositorio (por ejemplo en `secrets\firebase-service-account.json`, que git ignora) y no lo pegues en chats ni en tickets.
+2. En PowerShell, conviértelo a Base64 en una sola línea y cópialo al portapapeles, sin imprimirlo:
+
+   ```
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("secrets\firebase-service-account.json")) | Set-Clipboard
+   ```
+
+   Comprueba el portapapeles antes de pegarlo: `(Get-Clipboard).Length` tiene que dar unos 3000 o más (si da 0 o un número pequeño, no se ha copiado), y este comando tiene que escribir el id de tu proyecto de Firebase sin mostrar la clave:
+
+   ```
+   ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-Clipboard))) | ConvertFrom-Json).project_id
+   ```
+
+3. API → *Variables* (la del servicio de la API, no la de Postgres): primero añade `FCM_CREDENTIALS_JSON` = lo que hay en el portapapeles (solo el valor, sin `FCM_CREDENTIALS_JSON=` ni comillas) y comprueba que la variable aparece con un valor largo. Solo entonces añade `FCM_ENABLED` = `true` y pulsa *Deploy*. Si `FCM_ENABLED=true` llega sin credenciales, la API no arranca (ver abajo).
+4. Tiene que aparecer en el log de arranque `Notificaciones push activadas con Firebase Cloud Messaging`. Si las credenciales no se pueden leer, la API no arranca y el despliegue falla: el log lo dice (suele ser un Base64 cortado o con comillas).
+5. La app tiene que haberse compilado con `app/google-services.json` (ver el README de la app); sin ese fichero compila, pero sin push. Un conductor con Android 13 o superior tiene que haber aceptado el permiso de notificaciones al iniciar sesión.
+6. Prueba con un móvil real y la app cerrada: desde la cuenta de encargado, asigna un turno o lanza una llamada de ola a ese conductor. En el log de la API debe salir `FCM: 1 enviados`. Si sale `fallidos` o `FCM rechazó un envío`, la línea trae el motivo (credenciales de otro proyecto de Firebase, dispositivo no registrado...).
+
+Si el despliegue falla con `FCM_ENABLED=true pero faltan las credenciales`, la API se queda caída: el volumen impide que el despliegue anterior siga activo mientras arranca el nuevo. Para recuperarla, pon `FCM_ENABLED=false` y vuelve a desplegar; después revisa que `FCM_CREDENTIALS_JSON` existe en el servicio de la API, con el nombre exacto y un valor largo. Lo mismo sirve para desactivar las push cuando quieras.
+
+### Vigilar que la API siga arriba
+
+Railway reinicia la API si se cae, pero no te avisa de que no responde desde fuera. Un monitor externo pide `/health` cada pocos minutos y te escribe si falla:
+
+1. Crea una cuenta gratuita en un servicio de monitorización (UptimeRobot: 5 minutos entre comprobaciones; Better Stack: 3 minutos). Revisa sus condiciones del plan gratuito para un uso de empresa, porque cambian con el tiempo.
+2. Nuevo monitor *HTTP(s)*, URL `https://TU_DOMINIO/health`, intervalo el mínimo del plan. Opcional: monitor de palabra clave, con `UP` como palabra que debe aparecer.
+3. Alertas: tu correo y, mejor, la notificación push de la app del servicio, que se ve antes que un correo. Añade a quien lleve las olas si tiene que enterarse.
+4. Para probarlo, pausa el servicio un minuto en Railway y comprueba que llega el aviso (hazlo fuera de las horas de salida).
+
+`/health` responde 200 si la API arranca, pero no consulta la base de datos: no detecta una base de datos caída. Para eso, activa en Railway los avisos de despliegues fallidos y de caídas del servicio (ajustes del proyecto o de la cuenta) y mira *Metrics* de vez en cuando.
+
 ### Actualizar
 
 Cada despliegue de la API (un `git push`) provoca un corte de unos segundos, porque un servicio con volumen no puede tener dos despliegues activos a la vez: hazlo fuera de las horas de salida de las olas. Las migraciones se aplican solas al arrancar.
@@ -147,3 +184,6 @@ Sin ella, `assembleRelease` y `bundleRelease` se niegan a compilar para no publi
 - [ ] Puerto 8080 cerrado hacia fuera (solo 80 y 443). En Railway no aplica: ahí, `SHOW_SQL=false`, `RAILWAY_RUN_UID=0` y la prueba de la IP real.
 - [ ] Perfil `backup` activo, `./backups` copiado fuera del servidor y una restauración ensayada.
 - [ ] `CORS_ALLOWED_ORIGINS` vacío mientras no haya cliente web.
+- [ ] Push activas en producción (`FCM_ENABLED=true`) y probadas con un móvil real y la app cerrada.
+- [ ] Monitor externo de `/health` con alertas que lleguen a una persona.
+- [ ] `INSPECTION_PHOTO_RETENTION_DAYS` revisado: por defecto las fotos de los partes se borran a los 365 días.

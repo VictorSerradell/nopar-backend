@@ -1,6 +1,7 @@
 package com.company.nopar.integration;
 
 import com.company.nopar.config.ExpiredRefreshTokenCleanup;
+import com.company.nopar.config.InspectionPhotoRetention;
 import com.company.nopar.config.NightlyVehicleReset;
 import com.company.nopar.config.WaveChatRetention;
 import com.company.nopar.dto.AnnouncementRequest;
@@ -200,6 +201,8 @@ class PostgresIntegrationTest {
     private NightlyVehicleReset nightlyVehicleReset;
     @Autowired
     private WaveChatRetention waveChatRetention;
+    @Autowired
+    private InspectionPhotoRetention inspectionPhotoRetention;
     @Autowired
     private LoginRateLimiter loginRateLimiter;
     @Autowired
@@ -1935,6 +1938,61 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void theNightlyPhotoRetentionRemovesTheOldPhotosButKeepsTheInspectionsAndTheRecentPhotos() throws Exception {
+        User admin = saveUser("admin1", User.Role.ADMIN);
+        User driver = saveUser("ana", User.Role.DRIVER);
+        VehicleInspection old = report(saveVehicle("1111AAA", 1000), driver, 1100, "Golpe en el paragolpes");
+        VehicleInspection limit = report(saveVehicle("2222BBB", 2000), driver, 2100, null);
+        VehicleInspection recent = report(saveVehicle("3333CCC", 3000), driver, 3100, null);
+
+        // Con 365 días de retención: lo anterior al día límite pierde las fotos; el día límite y lo posterior las conserva
+        LocalDate today = LocalDate.now();
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        setInspectionDate(jdbc, old, today.minusDays(366).atTime(23, 59));
+        setInspectionDate(jdbc, limit, today.minusDays(365).atTime(0, 1));
+        setInspectionDate(jdbc, recent, today.minusDays(1).atTime(9, 0));
+        VehicleInspection oldBefore = inspectionRepository.findById(old.getId()).orElseThrow();
+        String oldOdometer = oldBefore.getOdometerPhotoPath();
+        String oldExterior = oldBefore.getExteriorPhotosPath();
+        String limitOdometer = inspectionRepository.findById(limit.getId()).orElseThrow().getOdometerPhotoPath();
+        String recentExterior = inspectionRepository.findById(recent.getId()).orElseThrow().getExteriorPhotosPath();
+        assertThat(oldOdometer).isNotNull();
+        assertThat(oldExterior).isNotNull();
+
+        inspectionPhotoRetention.deleteOldPhotos();
+
+        // El parte antiguo se conserva entero, sin sus fotos
+        VehicleInspection oldAfter = inspectionRepository.findById(old.getId()).orElseThrow();
+        assertThat(oldAfter.getOdometerPhotoPath()).isNull();
+        assertThat(oldAfter.getBeaconPhotoPath()).isNull();
+        assertThat(oldAfter.getExteriorPhotosPath()).isNull();
+        assertThat(oldAfter.getDamagesReported()).isEqualTo("Golpe en el paragolpes");
+        assertThat(oldAfter.getStatus()).isEqualTo(VehicleInspection.InspectionStatus.SUBMITTED);
+        assertThat(oldAfter.getKilometers()).isEqualTo(1100);
+        assertThat(Files.exists(UPLOADS.resolve(oldOdometer))).isFalse();
+        assertThat(Files.exists(UPLOADS.resolve(oldExterior))).isFalse();
+
+        // La respuesta de la API ya no ofrece fotos y pedirlas da 404
+        InspectionResponse response = savedResponse(old);
+        assertThat(response.odometerPhotoUrl()).isNull();
+        assertThat(response.exteriorPhotoUrl()).isNull();
+        mockMvc.perform(get("/api/v1/inspections/{id}/photos/odometer", old.getId()).with(user(admin)))
+                .andExpect(status().isNotFound());
+
+        // El día límite y lo reciente siguen con sus fotos, en la base de datos y en el disco
+        assertThat(Files.exists(UPLOADS.resolve(limitOdometer))).isTrue();
+        assertThat(Files.exists(UPLOADS.resolve(recentExterior))).isTrue();
+        assertThat(inspectionRepository.findById(limit.getId()).orElseThrow().getOdometerPhotoPath())
+                .isEqualTo(limitOdometer);
+        mockMvc.perform(get("/api/v1/inspections/{id}/photos/exterior", recent.getId()).with(user(admin)))
+                .andExpect(status().isOk());
+
+        // Una segunda pasada no encuentra nada más que quitar y no falla
+        inspectionPhotoRetention.deleteOldPhotos();
+        assertThat(inspectionRepository.count()).isEqualTo(3L);
+    }
+
+    @Test
     void callingAWaveNotifiesOnlyItsDriversTodayAndTheyConfirmWithEnterado() throws Exception {
         User admin = saveUser("admin1", User.Role.ADMIN);
         User manager = saveUser("encargado1", User.Role.MANAGER);
@@ -2461,6 +2519,12 @@ class PostgresIntegrationTest {
         InspectionCreateRequest request = new InspectionCreateRequest(
                 vehicle.getId(), kilometers, true, true, true, damages, true, true, true);
         return inspectionService.createInspection(request, odometerPhoto(), null, exteriorPhoto(), driver);
+    }
+
+    /** Cambia la fecha de un parte ya guardado (el servicio siempre lo crea con la hora actual). */
+    private static void setInspectionDate(JdbcTemplate jdbc, VehicleInspection inspection, LocalDateTime date) {
+        jdbc.update("update vehicle_inspections set inspection_date = ? where id = ?",
+                Timestamp.valueOf(date), inspection.getId());
     }
 
     /** Espera (hasta 5 segundos) a que algo que ocurre en segundo plano se cumpla. */

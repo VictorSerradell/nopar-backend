@@ -229,6 +229,41 @@ public class InspectionService {
                 : VehicleInspection.InspectionStatus.SUBMITTED;
     }
 
+    /**
+     * Retención de las fotos: quita las de los partes anteriores a {@code cutoff} y borra sus ficheros del disco. El
+     * parte (kilómetros, checklist, daños anotados, revisión) se conserva; solo desaparecen las imágenes, y la API
+     * devuelve null en sus *PhotoUrl y 404 si se piden.
+     *
+     * Los ficheros se borran cuando la transacción termina en commit: si fallara, las filas conservarían sus fotos y
+     * no quedarían referencias rotas. Devuelve cuántos partes se han quedado sin fotos.
+     */
+    @Transactional
+    public int deletePhotosBefore(LocalDateTime cutoff) {
+        List<String> files = new ArrayList<>();
+        files.addAll(inspectionRepository.findOdometerPhotoFilesBefore(cutoff));
+        files.addAll(inspectionRepository.findBeaconPhotoFilesBefore(cutoff));
+        files.addAll(inspectionRepository.findExteriorPhotoFilesBefore(cutoff));
+        int cleared = inspectionRepository.clearPhotosBefore(cutoff);
+        deleteFilesAfterCommit(files);
+        return cleared;
+    }
+
+    private void deleteFilesAfterCommit(List<String> files) {
+        if (files.isEmpty()) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    files.forEach(fileStorageService::delete);
+                }
+            });
+        } else {
+            files.forEach(fileStorageService::delete);
+        }
+    }
+
     private Vehicle findVehicle(Long vehicleId) {
         return vehicleRepository.findById(vehicleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Vehículo no encontrado con ID: " + vehicleId));

@@ -479,6 +479,56 @@ class InspectionServiceTest {
         verifyNoInteractions(fileStorageService);
     }
 
+    // ------------------------------------------------------------ retención de fotos
+
+    @Test
+    void givenOldInspections_whenDeletePhotosBefore_thenTheFilesAreDeletedOnlyOnceTheTransactionCommits() {
+        LocalDateTime cutoff = LocalDateTime.of(2025, 11, 26, 0, 0);
+        when(inspectionRepository.findOdometerPhotoFilesBefore(cutoff)).thenReturn(List.of("odo1.jpg", "odo2.jpg"));
+        when(inspectionRepository.findBeaconPhotoFilesBefore(cutoff)).thenReturn(List.of("beacon1.png"));
+        when(inspectionRepository.findExteriorPhotoFilesBefore(cutoff)).thenReturn(List.of("ext1.jpg", "ext2.jpg"));
+        when(inspectionRepository.clearPhotosBefore(cutoff)).thenReturn(2);
+
+        assertThat(inspectionService.deletePhotosBefore(cutoff)).isEqualTo(2);
+
+        // Hasta el commit las filas aún podrían volver atrás: los ficheros no se tocan
+        verifyNoInteractions(fileStorageService);
+        commitTransaction();
+        verify(fileStorageService).delete("odo1.jpg");
+        verify(fileStorageService).delete("odo2.jpg");
+        verify(fileStorageService).delete("beacon1.png");
+        verify(fileStorageService).delete("ext1.jpg");
+        verify(fileStorageService).delete("ext2.jpg");
+    }
+
+    @Test
+    void givenTheTransactionRollsBack_whenDeletePhotosBefore_thenNoFileIsDeleted() {
+        LocalDateTime cutoff = LocalDateTime.of(2025, 11, 26, 0, 0);
+        when(inspectionRepository.findOdometerPhotoFilesBefore(cutoff)).thenReturn(List.of("odo1.jpg"));
+        when(inspectionRepository.findBeaconPhotoFilesBefore(cutoff)).thenReturn(List.of());
+        when(inspectionRepository.findExteriorPhotoFilesBefore(cutoff)).thenReturn(List.of("ext1.jpg"));
+        when(inspectionRepository.clearPhotosBefore(cutoff)).thenReturn(1);
+
+        inspectionService.deletePhotosBefore(cutoff);
+        finishTransaction(TransactionSynchronization.STATUS_ROLLED_BACK);
+
+        verifyNoInteractions(fileStorageService);
+    }
+
+    @Test
+    void givenNothingOld_whenDeletePhotosBefore_thenNoFileIsTouched() {
+        LocalDateTime cutoff = LocalDateTime.of(2025, 11, 26, 0, 0);
+        when(inspectionRepository.findOdometerPhotoFilesBefore(cutoff)).thenReturn(List.of());
+        when(inspectionRepository.findBeaconPhotoFilesBefore(cutoff)).thenReturn(List.of());
+        when(inspectionRepository.findExteriorPhotoFilesBefore(cutoff)).thenReturn(List.of());
+        when(inspectionRepository.clearPhotosBefore(cutoff)).thenReturn(0);
+
+        assertThat(inspectionService.deletePhotosBefore(cutoff)).isZero();
+        commitTransaction();
+
+        verifyNoInteractions(fileStorageService);
+    }
+
     // ------------------------------------------------------------ utilidades
 
     private static User userWithRole(Long id, User.Role role) {
@@ -501,6 +551,10 @@ class InspectionServiceTest {
 
     private static Sort newestFirst() {
         return Sort.by(Sort.Direction.DESC, "inspectionDate").and(Sort.by(Sort.Direction.DESC, "id"));
+    }
+
+    private static void commitTransaction() {
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
     }
 
     private static void finishTransaction(int status) {
