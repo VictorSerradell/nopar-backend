@@ -445,6 +445,17 @@ class InspectionServiceTest {
     }
 
     @Test
+    void givenAManager_whenGetPhotoOfADriver_thenLoadsTheStoredFile() {
+        User author = userWithRole(7L, User.Role.DRIVER);
+        User manager = userWithRole(5L, User.Role.MANAGER);
+        when(inspectionRepository.findWithDetailsById(1L)).thenReturn(Optional.of(inspectionWithOdometer(1L, author)));
+        FileStorageService.StoredFile stored = storedJpeg();
+        when(fileStorageService.load("odo.jpg")).thenReturn(stored);
+
+        assertThat(inspectionService.getPhoto(1L, InspectionPhotoType.ODOMETER, manager)).isSameAs(stored);
+    }
+
+    @Test
     void givenAnotherDriver_whenGetPhoto_thenAccessDeniedAndTheFileIsNotRead() {
         User author = userWithRole(7L, User.Role.DRIVER);
         User other = userWithRole(8L, User.Role.DRIVER);

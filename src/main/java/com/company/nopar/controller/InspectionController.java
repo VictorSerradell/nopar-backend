@@ -61,20 +61,20 @@ public class InspectionController {
     }
 
     /**
-     * Una foto del parte: odometer, beacon o exterior. La ven el conductor que hizo el parte y los administradores.
+     * Una foto del parte: odometer, beacon o exterior. La ven el conductor que hizo el parte, los encargados y los administradores.
      * Se pide con la cabecera Authorization, así que un cliente web la descarga como blob en vez de usar
      * {@code <img src>} directamente. Es privada para la caché: solo la guarda el dispositivo de quien la pidió.
      */
     @Operation(summary = "Descarga una foto del parte",
-            description = "Devuelve la imagen (image/jpeg o image/png). La ven el conductor que hizo el parte y los administradores. La URL de cada foto viene en los campos `odometerPhotoUrl`, `beaconPhotoUrl` y `exteriorPhotoUrl` del parte (null si no se envió).")
+            description = "Devuelve la imagen (image/jpeg o image/png). La ven el conductor que hizo el parte, los encargados y los administradores. La URL de cada foto viene en los campos `odometerPhotoUrl`, `beaconPhotoUrl` y `exteriorPhotoUrl` del parte (null si no se envió).")
     @ApiResponse(responseCode = "200", description = "La imagen",
             content = {
                     @Content(mediaType = "image/jpeg", schema = @Schema(type = "string", format = "binary")),
                     @Content(mediaType = "image/png", schema = @Schema(type = "string", format = "binary"))})
-    @ApiResponse(responseCode = "403", description = "El parte lo hizo otro conductor")
+    @ApiResponse(responseCode = "403", description = "Eres conductor y el parte lo hizo otro")
     @ApiResponse(responseCode = "404", description = "El parte no existe, no tiene esa foto o el tipo no es válido")
     @GetMapping("/{id}/photos/{type}")
-    @PreAuthorize("hasAnyRole('DRIVER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('DRIVER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Resource> getPhoto(
             @PathVariable Long id,
             @Parameter(description = "Foto que se pide", schema = @Schema(allowableValues = {"odometer", "beacon", "exterior"}))

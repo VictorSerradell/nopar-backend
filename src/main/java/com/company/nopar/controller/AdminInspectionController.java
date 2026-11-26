@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,16 +33,21 @@ public class AdminInspectionController {
 
     private final InspectionService inspectionService;
 
-    @Operation(summary = "Lista todos los partes", description = "Paginado, del más reciente al más antiguo.")
+    @Operation(summary = "Lista todos los partes",
+            description = "Paginado, del más reciente al más antiguo. Con `status` (SUBMITTED, APPROVED o REJECTED) solo los de ese estado; sin él, todos.")
+    @ApiResponse(responseCode = "400", description = "El estado no es SUBMITTED, APPROVED ni REJECTED, o la paginación no es válida")
     @GetMapping
     public ResponseEntity<PageResponse<InspectionResponse>> getAllInspections(
+            @RequestParam(required = false) VehicleInspection.InspectionStatus status,
             @RequestParam(defaultValue = PageResponse.DEFAULT_PAGE)
             @Min(value = 0, message = PageResponse.PAGE_MIN_MESSAGE) int page,
             @RequestParam(defaultValue = PageResponse.DEFAULT_SIZE)
             @Min(value = 1, message = PageResponse.SIZE_MIN_MESSAGE)
             @Max(value = PageResponse.MAX_SIZE, message = PageResponse.SIZE_MAX_MESSAGE) int size) {
-        return ResponseEntity.ok(PageResponse.of(
-                inspectionService.getAllInspections(page, size), InspectionResponse::from));
+        Page<VehicleInspection> inspections = status != null
+                ? inspectionService.getInspectionsByStatus(status, page, size)
+                : inspectionService.getAllInspections(page, size);
+        return ResponseEntity.ok(PageResponse.of(inspections, InspectionResponse::from));
     }
 
     /** Aprueba o rechaza una inspección pendiente (SUBMITTED). Queda constancia de quién y cuándo. */

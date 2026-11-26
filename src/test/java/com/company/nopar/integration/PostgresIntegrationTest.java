@@ -407,6 +407,49 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.content[0].reviewedByUsername").value("admin1"));
     }
 
+    @Test
+    void inspectionsCanBeFilteredByStatusAndManagersSeeThemButOnlyAdminsReview() throws Exception {
+        Scenario s = fiveInspections(); // 2 pendientes, 2 aprobados y 1 rechazado
+        User manager = saveUser("encargado1", User.Role.MANAGER);
+
+        // Sin filtro, los cinco; el encargado los ve igual que el administrador
+        for (String url : List.of("/api/v1/admin/inspections", "/api/v1/dispatch/inspections")) {
+            User viewer = url.contains("/admin/") ? s.admin() : manager;
+            mockMvc.perform(get(url).with(user(viewer)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.totalElements").value(5));
+
+            // Con filtro, solo ese estado, con el total y las páginas de ese estado (no del resto)
+            mockMvc.perform(get(url).param("status", "SUBMITTED").param("size", "1").with(user(viewer)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.totalElements").value(2))
+                    .andExpect(jsonPath("$.totalPages").value(2))
+                    .andExpect(jsonPath("$.content.length()").value(1))
+                    .andExpect(jsonPath("$.content[0].status").value("SUBMITTED"))
+                    .andExpect(jsonPath("$.content[0].damagesReported").value("Faro roto"));
+            mockMvc.perform(get(url).param("status", "APPROVED").with(user(viewer)))
+                    .andExpect(jsonPath("$.totalElements").value(2))
+                    .andExpect(jsonPath("$.content[?(@.status != 'APPROVED')]").isEmpty());
+            mockMvc.perform(get(url).param("status", "REJECTED").with(user(viewer)))
+                    .andExpect(jsonPath("$.totalElements").value(1))
+                    .andExpect(jsonPath("$.content[0].reviewedByUsername").value("admin1"));
+
+            // Un estado que no existe es un 400, no una lista vacía
+            mockMvc.perform(get(url).param("status", "PENDIENTE").with(user(viewer)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.title").value("Datos no válidos"));
+        }
+
+        // Los conductores no ven la lista de los encargados, y los encargados no aprueban ni rechazan
+        mockMvc.perform(get("/api/v1/dispatch/inspections").with(user(s.driver1())))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(patch("/api/v1/admin/inspections/{id}/review", s.oldest().getId())
+                        .with(user(manager))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"decision\": \"REJECTED\"}"))
+                .andExpect(status().isForbidden());
+    }
+
     // ------------------------------------------------------------------ reglas de negocio contra la base de datos
 
     @Test
@@ -609,8 +652,9 @@ class PostgresIntegrationTest {
     // ------------------------------------------------------------------ fotos de los partes
 
     @Test
-    void inspectionPhotosAreServedOverHttpOnlyToTheDriverWhoMadeTheReportAndToAdmins() throws Exception {
+    void inspectionPhotosAreServedOverHttpOnlyToTheDriverWhoMadeTheReportAndToManagersAndAdmins() throws Exception {
         User admin = saveUser("admin1", User.Role.ADMIN);
+        User manager = saveUser("encargado1", User.Role.MANAGER);
         User author = saveUser("author", User.Role.DRIVER);
         User other = saveUser("other", User.Role.DRIVER);
         VehicleInspection report = report(saveVehicle("1111AAA", 1000), author, 1100, null);
@@ -624,8 +668,8 @@ class PostgresIntegrationTest {
                 .andExpect(jsonPath("$.content[0].beaconPhotoUrl").doesNotExist())
                 .andExpect(jsonPath("$.content[0].exteriorPhotoUrl").value(exteriorUrl));
 
-        // El conductor del parte y un administrador la descargan, con su tipo y con caché solo privada
-        for (User allowed : List.of(author, admin)) {
+        // El conductor del parte, un encargado y un administrador la descargan, con su tipo y con caché solo privada
+        for (User allowed : List.of(author, manager, admin)) {
             mockMvc.perform(get(odometerUrl).with(user(allowed)))
                     .andExpect(status().isOk())
                     .andExpect(content().contentType(MediaType.IMAGE_JPEG))

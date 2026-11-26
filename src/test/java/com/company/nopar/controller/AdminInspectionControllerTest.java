@@ -23,7 +23,9 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -60,6 +62,31 @@ class AdminInspectionControllerTest {
                 .andExpect(jsonPath("$.content[0].reviewedByUsername").doesNotExist())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$..password").isEmpty());
+    }
+
+    @Test
+    void givenAStatus_whenGetAll_thenOnlyThatStatusIsAskedFor() throws Exception {
+        when(inspectionService.getInspectionsByStatus(VehicleInspection.InspectionStatus.SUBMITTED, 2, 10))
+                .thenReturn(new PageImpl<>(
+                        List.of(inspection(VehicleInspection.InspectionStatus.SUBMITTED)), PageRequest.of(2, 10), 21));
+
+        mockMvc.perform(get("/api/v1/admin/inspections?status=SUBMITTED&page=2&size=10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].status").value("SUBMITTED"))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.totalElements").value(21));
+
+        verify(inspectionService).getInspectionsByStatus(VehicleInspection.InspectionStatus.SUBMITTED, 2, 10);
+        verifyNoMoreInteractions(inspectionService);
+    }
+
+    @Test
+    void givenAnUnknownStatus_whenGetAll_thenBadRequestWithoutTouchingTheService() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/inspections?status=PENDIENTE"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Datos no válidos"));
+
+        verifyNoInteractions(inspectionService);
     }
 
     @Test

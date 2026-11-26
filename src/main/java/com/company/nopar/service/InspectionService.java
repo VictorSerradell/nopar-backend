@@ -164,8 +164,8 @@ public class InspectionService {
     }
 
     /**
-     * Una de las fotos de un parte. La ve un administrador o el conductor que hizo el parte; cualquier otro
-     * usuario recibe 403 (AccessDeniedException llega a Spring Security, igual que con @PreAuthorize).
+     * Una de las fotos de un parte. La ve un administrador, un encargado o el conductor que hizo el parte; cualquier otro
+     * conductor recibe 403 (AccessDeniedException llega a Spring Security, igual que con @PreAuthorize).
      * 404 si el parte no existe o no tiene esa foto, o si el fichero ya no está en el disco.
      */
     @Transactional(readOnly = true)
@@ -173,7 +173,7 @@ public class InspectionService {
         VehicleInspection inspection = inspectionRepository.findWithDetailsById(inspectionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Inspección no encontrada con ID: " + inspectionId));
 
-        requireAuthorOrAdmin(inspection, actor);
+        requireAuthorOrStaff(inspection, actor);
 
         String storedName = type.storedNameOf(inspection);
         if (storedName == null) {
@@ -203,14 +203,14 @@ public class InspectionService {
         return inspectionRepository.findByStatus(status, newestFirst(page, size));
     }
 
-    private static void requireAuthorOrAdmin(VehicleInspection inspection, User actor) {
-        if (actor.getRole() == User.Role.ADMIN) {
+    private static void requireAuthorOrStaff(VehicleInspection inspection, User actor) {
+        if (actor.getRole() == User.Role.ADMIN || actor.getRole() == User.Role.MANAGER) {
             return;
         }
         User author = inspection.getDriver();
         if (author == null || !Objects.equals(author.getId(), actor.getId())) {
             throw new AccessDeniedException(
-                    "Solo el conductor que hizo el parte, o un administrador, puede ver sus fotos");
+                    "Solo el conductor que hizo el parte, un encargado o un administrador pueden ver sus fotos");
         }
     }
 
