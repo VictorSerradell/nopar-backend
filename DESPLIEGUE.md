@@ -95,6 +95,7 @@ Alternativa al servidor propio: Railway ejecuta la API y PostgreSQL y da HTTPS s
 | `SHOW_SQL` | `false` (sin definir, la API imprime todo el SQL en el log) |
 | `RAILWAY_RUN_UID` | `0`: la imagen se ejecuta con un usuario sin privilegios y, sin esto, no puede escribir en el volumen |
 | `JAVA_OPTS` | `-Xms128m -Xmx384m -XX:+UseSerialGC -Duser.timezone=Europe/Madrid`: limita la memoria de la JVM, que Railway cobra por uso. Empieza así y vigila *Metrics* |
+| `SERVER_TOMCAT_REMOTEIP_REMOTE_IP_HEADER` | `X-Real-IP`: Railway pasa ahí la IP del cliente. Sin esta variable la API ve la de un proxy de Railway y el límite de intentos de login cuenta por ella (ver «IP real y límite de intentos de login») |
 | `FCM_ENABLED`, `FCM_CREDENTIALS_JSON` | Notificaciones push: el JSON de Firebase en Base64 (ver `.env.example`) |
 
    La API ya escucha en el `PORT` que Railway inyecta. `CORS_ALLOWED_ORIGINS` déjala sin definir mientras no haya cliente web.
@@ -105,22 +106,22 @@ Alternativa al servidor propio: Railway ejecuta la API y PostgreSQL y da HTTPS s
 
 ### IP real y límite de intentos de login
 
-Según su documentación, Railway pasa la IP del cliente en `X-Real-IP`. Para que el límite de intentos de login cuente por IP real y no por la del proxy, comprueba qué ve la API:
+Railway pasa la IP del cliente en `X-Real-IP`, y la API solo la usa si se lo indicas con `SERVER_TOMCAT_REMOTEIP_REMOTE_IP_HEADER=X-Real-IP` (está en la tabla de variables). Sin ella, en el primer despliegue la API veía una IP pública que no era la del cliente (la de un proxy de Railway), compartida por todos los conductores. Para comprobar que el límite de intentos de login cuenta por IP real, mira qué ve la API:
 
 1. Desde el móvil (con datos, no con el wifi de la estación), haz 5 inicios de sesión con una contraseña equivocada.
 2. En el log de la API busca `Inicio de sesión bloqueado`: tras `user-ip:usuario|` va la IP que ve la API. Tiene que ser la del móvil.
-3. Si sale una dirección interna de Railway, añade `SERVER_TOMCAT_REMOTEIP_REMOTE_IP_HEADER=X-Real-IP` y `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` con el rango de esa dirección (expresión regular, por ejemplo `100\.64\..*`), vuelve a desplegar y repite la prueba.
-4. Comprueba también que un cliente no puede falsear su IP: repite los 5 intentos con `curl -H "X-Real-IP: 9.9.9.9" …`; el log debe seguir mostrando tu IP real, no `9.9.9.9`.
+3. Si sale una dirección que no es la tuya, comprueba que `SERVER_TOMCAT_REMOTEIP_REMOTE_IP_HEADER=X-Real-IP` está definida, vuelve a desplegar y repite la prueba. Si sigue sin salir tu IP, añade también `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` con el rango de la dirección del proxy (expresión regular, por ejemplo `100\.64\..*`).
+4. Comprueba también que un cliente no puede falsear su IP: repite los 5 intentos con `curl -H "X-Real-IP: 9.9.9.9" …`; el log debe seguir mostrando tu IP real, no `9.9.9.9`. Con `X-Real-IP` ya configurada, esta prueba se hizo en el primer despliegue y la cabecera falsa se ignoró.
 
 Sin esto, todos los conductores compartirían contador de IP (50 fallos cada 15 minutos).
 
 ### Copias de seguridad
 
 - En el servicio de PostgreSQL y en el de la API (fotos): pestaña *Backups* → programa una copia diaria y otra semanal. Comprueba que tu plan las incluye. Se restauran desde la misma pestaña, en el mismo servicio, proyecto y entorno.
-- Además, de vez en cuando, una copia de la base de datos fuera de Railway. La URL pública sale de la variable `DATABASE_PUBLIC_URL` del servicio PostgreSQL; la versión de `pg_dump` tiene que ser la del servidor (ajusta `17` si no lo es):
+- Además, de vez en cuando, una copia de la base de datos fuera de Railway. La URL pública sale de la variable `DATABASE_PUBLIC_URL` del servicio PostgreSQL; la versión de `pg_dump` tiene que ser la del servidor o superior (el PostgreSQL de Railway era la 18 al desplegar; ajusta `18` si el tuyo es otro):
 
 ```
-docker run --rm -v "${PWD}:/out" postgres:17-alpine pg_dump "URL_PUBLICA" -Fc -f /out/copia-railway.dump
+docker run --rm -v "${PWD}:/out" postgres:18-alpine pg_dump "URL_PUBLICA" -Fc -f /out/copia-railway.dump
 ```
 
   Para restaurar ese fichero, sigue «Restaurar» de la sección de copias de seguridad, apuntando a la base de datos de destino.
