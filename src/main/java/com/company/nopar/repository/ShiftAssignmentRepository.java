@@ -18,6 +18,9 @@ import java.util.Optional;
 @Repository
 public interface ShiftAssignmentRepository extends JpaRepository<ShiftAssignment, Long> {
 
+    /** Los turnos de un conductor desde un día en adelante (sin relaciones: solo para borrarlos). */
+    List<ShiftAssignment> findByDriverIdAndWorkDateGreaterThanEqual(Long driverId, LocalDate from);
+
     /** El cuadrante de un rango de fechas, en el orden en que se lee: día, hora de la ola y conductor. */
     @Query("""
             select s from ShiftAssignment s

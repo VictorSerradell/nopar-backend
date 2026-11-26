@@ -61,6 +61,7 @@ public class TodayScheduleService {
         }
         List<User> freeDrivers = userRepository
                 .findByRole(User.Role.DRIVER, Sort.by(Sort.Order.asc("username").ignoreCase())).stream()
+                .filter(User::isEnabled)
                 .filter(driver -> !busyDrivers.contains(driver.getId()))
                 .toList();
         List<Vehicle> freeVehicles = vehicleRepository.findAll(Sort.by("licensePlate")).stream()

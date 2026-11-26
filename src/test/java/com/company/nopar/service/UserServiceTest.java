@@ -13,14 +13,17 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -40,6 +43,9 @@ class UserServiceTest {
 
     @Mock
     private DeviceService deviceService;
+
+    @Mock
+    private ShiftService shiftService;
 
     @InjectMocks
     private UserService userService;
@@ -125,7 +131,7 @@ class UserServiceTest {
 
     @Test
     void givenTheCurrentPassword_whenChangePassword_thenStoresTheNewHashRevokesEverySessionAndDropsTheDevices() {
-        User user = existingUser("conductor1", "$2a$10$viejo");
+        User user = existingManager("encargado1", "$2a$10$viejo");
         when(userRepository.findById(7L)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("clave-vieja-123", "$2a$10$viejo")).thenReturn(true);
         when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
@@ -134,13 +140,13 @@ class UserServiceTest {
 
         assertThat(result).isSameAs(user);
         assertThat(user.getPassword()).isEqualTo("$2a$10$nuevo");
-        verify(refreshTokenService).deleteByUser("conductor1");
+        verify(refreshTokenService).deleteByUser("encargado1");
         verify(deviceService).unregisterAllDevices(7L);
     }
 
     @Test
     void givenAWrongCurrentPassword_whenChangePassword_thenRejectedAndNothingChanges() {
-        User user = existingUser("conductor1", "$2a$10$viejo");
+        User user = existingManager("encargado1", "$2a$10$viejo");
         when(userRepository.findById(7L)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("no-es-esta-1", "$2a$10$viejo")).thenReturn(false);
 
@@ -155,7 +161,7 @@ class UserServiceTest {
 
     @Test
     void givenTheSamePasswordAsTheNewOne_whenChangePassword_thenRejectedAndSessionsStayOpen() {
-        User user = existingUser("conductor1", "$2a$10$viejo");
+        User user = existingManager("encargado1", "$2a$10$viejo");
         when(userRepository.findById(7L)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("clave-vieja-123", "$2a$10$viejo")).thenReturn(true);
 
@@ -172,7 +178,7 @@ class UserServiceTest {
     void givenANewPasswordOver72Bytes_whenChangePassword_thenRejectedEvenWithFewCharacters() {
         // 37 caracteres, pero cada "ñ" ocupa 2 bytes en UTF-8: 74 bytes, más de lo que BCrypt admite
         String tooManyBytes = "ñ".repeat(37);
-        User user = existingUser("conductor1", "$2a$10$viejo");
+        User user = existingManager("encargado1", "$2a$10$viejo");
         when(userRepository.findById(7L)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("clave-vieja-123", "$2a$10$viejo")).thenReturn(true);
 
@@ -188,7 +194,7 @@ class UserServiceTest {
     @Test
     void givenACurrentPasswordOver72Bytes_whenChangePassword_thenItCannotBeTheStoredOneAndTheEncoderIsNotAsked() {
         String tooManyBytes = "ñ".repeat(37);
-        when(userRepository.findById(7L)).thenReturn(Optional.of(existingUser("conductor1", "$2a$10$viejo")));
+        when(userRepository.findById(7L)).thenReturn(Optional.of(existingManager("encargado1", "$2a$10$viejo")));
 
         assertThatThrownBy(() -> userService.changePassword(7L, tooManyBytes, "clave-nueva-456"))
                 .isInstanceOf(InvalidRequestException.class)
@@ -205,6 +211,204 @@ class UserServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class);
 
         verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
+    }
+
+    @Test
+    void givenADriver_whenChangePassword_thenDeniedAndNothingIsTouched() {
+        User driver = existingUser("conductor1", "$2a$10$viejo");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        assertThatThrownBy(() -> userService.changePassword(7L, "clave-vieja-123", "clave-nueva-456"))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("conductores");
+
+        assertThat(driver.getPassword()).isEqualTo("$2a$10$viejo");
+        verifyNoInteractions(passwordEncoder, refreshTokenService, deviceService);
+    }
+
+    @Test
+    void givenAnAdmin_whenChangePassword_thenItIsAllowed() {
+        User admin = existingUser("admin", "$2a$10$viejo");
+        admin.setRole(User.Role.ADMIN);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(admin));
+        when(passwordEncoder.matches("clave-vieja-123", "$2a$10$viejo")).thenReturn(true);
+        when(passwordEncoder.encode("clave-nueva-456")).thenReturn("$2a$10$nuevo");
+
+        userService.changePassword(7L, "clave-vieja-123", "clave-nueva-456");
+
+        assertThat(admin.getPassword()).isEqualTo("$2a$10$nuevo");
+    }
+
+    // ------------------------------------------------------------------ super administrador y desactivación
+
+    @Test
+    void whenCreateSuperAdmin_thenSavesAnAdminMarkedAsSuperAdmin() {
+        when(passwordEncoder.encode("password-segura-123")).thenReturn("$2a$10$hash");
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        User created = userService.createSuperAdmin("jefe", "password-segura-123");
+
+        assertThat(created.getRole()).isEqualTo(User.Role.ADMIN);
+        assertThat(created.isSuperAdmin()).isTrue();
+        assertThat(created.isEnabled()).isTrue();
+    }
+
+    @Test
+    void whenCreateAnOrdinaryUser_thenItIsActiveAndNotSuperAdmin() {
+        when(passwordEncoder.encode("password-segura-123")).thenReturn("$2a$10$hash");
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        User created = userService.createUser("admin2", "password-segura-123", User.Role.ADMIN);
+
+        assertThat(created.isSuperAdmin()).isFalse();
+        assertThat(created.isEnabled()).isTrue();
+    }
+
+    @Test
+    void givenAnAdmin_whenPromoteToSuperAdmin_thenMarkedAndActiveWithoutTouchingThePassword() {
+        User admin = existingUser("admin", "$2a$10$intacta");
+        admin.setRole(User.Role.ADMIN);
+        admin.setEnabled(false);
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+
+        userService.promoteToSuperAdmin("admin");
+
+        assertThat(admin.isSuperAdmin()).isTrue();
+        assertThat(admin.isEnabled()).isTrue();
+        assertThat(admin.getPassword()).isEqualTo("$2a$10$intacta");
+        verifyNoInteractions(passwordEncoder);
+    }
+
+    @Test
+    void givenANonAdmin_whenPromoteToSuperAdmin_thenRejected() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        when(userRepository.findByUsername("conductor1")).thenReturn(Optional.of(driver));
+
+        assertThatThrownBy(() -> userService.promoteToSuperAdmin("conductor1"))
+                .isInstanceOf(InvalidRequestException.class);
+
+        assertThat(driver.isSuperAdmin()).isFalse();
+    }
+
+    @Test
+    void givenADriver_whenASuperAdminDeactivatesHim_thenSessionsDevicesAndUpcomingShiftsAreRemovedButNotTheHistory() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.deactivateUser(7L, superAdmin(1L));
+
+        assertThat(driver.isEnabled()).isFalse();
+        verify(refreshTokenService).deleteByUser("conductor1");
+        verify(deviceService).unregisterAllDevices(7L);
+        verify(shiftService).deleteShiftsOfDriverFrom(eq(7L), any(LocalDate.class));
+    }
+
+    @Test
+    void givenAManager_whenASuperAdminDeactivatesHim_thenHeHasNoShiftsToRemove() {
+        User manager = existingManager("encargado1", "$2a$10$hash");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(manager));
+
+        userService.deactivateUser(7L, superAdmin(1L));
+
+        assertThat(manager.isEnabled()).isFalse();
+        verify(refreshTokenService).deleteByUser("encargado1");
+        verify(deviceService).unregisterAllDevices(7L);
+        verifyNoInteractions(shiftService);
+    }
+
+    @Test
+    void givenAnAdminThatIsNotSuperAdmin_whenDeactivate_thenDeniedAndNothingIsTouched() {
+        User plainAdmin = existingUser("admin2", "$2a$10$hash");
+        plainAdmin.setId(2L);
+        plainAdmin.setRole(User.Role.ADMIN);
+
+        assertThatThrownBy(() -> userService.deactivateUser(7L, plainAdmin))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> userService.deactivateUser(7L, null))
+                .isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(userRepository, refreshTokenService, deviceService, shiftService);
+    }
+
+    @Test
+    void givenTheSuperAdminHimself_whenDeactivate_thenRejected() {
+        User me = superAdmin(7L);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(me));
+
+        assertThatThrownBy(() -> userService.deactivateUser(7L, me))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("propia cuenta");
+
+        assertThat(me.isEnabled()).isTrue();
+        verifyNoInteractions(refreshTokenService, deviceService, shiftService);
+    }
+
+    @Test
+    void givenAnotherSuperAdmin_whenDeactivate_thenRejected() {
+        User other = superAdmin(7L);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(other));
+
+        assertThatThrownBy(() -> userService.deactivateUser(7L, superAdmin(1L)))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("super administrador");
+
+        assertThat(other.isEnabled()).isTrue();
+        verifyNoInteractions(refreshTokenService, deviceService, shiftService);
+    }
+
+    @Test
+    void givenAnUnknownUser_whenDeactivate_thenNotFound() {
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.deactivateUser(99L, superAdmin(1L)))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void givenAnAlreadyDeactivatedUser_whenDeactivateAgain_thenNothingHappens() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        driver.setEnabled(false);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.deactivateUser(7L, superAdmin(1L));
+
+        verifyNoInteractions(refreshTokenService, deviceService, shiftService);
+    }
+
+    @Test
+    void givenADeactivatedUser_whenASuperAdminActivatesHim_thenHeIsActiveAgain() {
+        User driver = existingUser("conductor1", "$2a$10$hash");
+        driver.setEnabled(false);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(driver));
+
+        userService.activateUser(7L, superAdmin(1L));
+
+        assertThat(driver.isEnabled()).isTrue();
+    }
+
+    @Test
+    void givenAnAdminThatIsNotSuperAdmin_whenActivate_thenDenied() {
+        User plainAdmin = existingUser("admin2", "$2a$10$hash");
+        plainAdmin.setRole(User.Role.ADMIN);
+
+        assertThatThrownBy(() -> userService.activateUser(7L, plainAdmin))
+                .isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(userRepository);
+    }
+
+    private static User superAdmin(Long id) {
+        User user = existingUser("jefe", "$2a$10$hash");
+        user.setId(id);
+        user.setRole(User.Role.ADMIN);
+        user.setSuperAdmin(true);
+        return user;
+    }
+
+    private static User existingManager(String username, String passwordHash) {
+        User user = existingUser(username, passwordHash);
+        user.setRole(User.Role.MANAGER);
+        return user;
     }
 
     private static User existingUser(String username, String passwordHash) {

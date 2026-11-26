@@ -102,6 +102,42 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
+    void givenADeactivatedAccount_whenFilter_thenItsStillValidTokenDoesNotAuthenticate() throws Exception {
+        UserDetails deactivated = org.springframework.security.core.userdetails.User
+                .withUsername("conductor1")
+                .password("irrelevante")
+                .authorities("ROLE_DRIVER")
+                .disabled(true)
+                .build();
+        String token = jwtService.generateToken(driver); // emitido cuando la cuenta estaba activa y aún no ha caducado
+        when(userDetailsService.loadUserByUsername("conductor1")).thenReturn(deactivated);
+        MockFilterChain chain = new MockFilterChain();
+
+        run(requestWithBearer(PROTECTED_PATH, token), chain);
+
+        assertThat(chain.getRequest()).isNotNull();
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void givenASuperAdmin_whenGenerateToken_thenOnlyHisTokenCarriesTheSuperAdminClaim() {
+        com.company.nopar.entity.User superAdmin = new com.company.nopar.entity.User();
+        superAdmin.setUsername("jefe");
+        superAdmin.setRole(com.company.nopar.entity.User.Role.ADMIN);
+        superAdmin.setSuperAdmin(true);
+        com.company.nopar.entity.User admin = new com.company.nopar.entity.User();
+        admin.setUsername("admin2");
+        admin.setRole(com.company.nopar.entity.User.Role.ADMIN);
+
+        String superToken = jwtService.generateToken(superAdmin);
+        String adminToken = jwtService.generateToken(admin);
+
+        assertThat(jwtService.extractClaim(superToken, claims -> claims.get("superAdmin", Boolean.class))).isTrue();
+        assertThat(jwtService.extractClaim(adminToken, claims -> claims.get("superAdmin"))).isNull();
+        assertThat(jwtService.extractClaim(superToken, claims -> claims.get("roles"))).isEqualTo(java.util.List.of("ROLE_ADMIN"));
+    }
+
+    @Test
     void givenExpiredToken_whenFilter_thenContinuesWithoutAuthentication() throws Exception {
         String expiredToken = jwtServiceWith(SECRET, -1_000L).generateToken(driver);
         MockFilterChain chain = new MockFilterChain();

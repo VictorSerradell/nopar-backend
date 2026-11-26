@@ -1,5 +1,6 @@
 package com.company.nopar.security;
 
+import com.company.nopar.entity.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
@@ -42,6 +43,10 @@ public class JwtService {
         extraClaims.put("roles", userDetails.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
                 .collect(Collectors.toList()));
+        // Solo informativo, como los roles: la app lo usa para enseñar u ocultar las acciones de super administrador
+        if (userDetails instanceof User user && user.isSuperAdmin()) {
+            extraClaims.put("superAdmin", true);
+        }
 
         return buildToken(extraClaims, userDetails, jwtExpiration);
     }

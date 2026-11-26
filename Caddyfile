@@ -1,0 +1,10 @@
+# Caddy: HTTPS automático delante de la API de Nopar. Solo se usa con "docker compose --profile https up -d".
+# NOPAR_DOMAIN es el dominio público (variable del .env); Caddy obtiene y renueva su certificado por sí solo.
+{$NOPAR_DOMAIN} {
+	encode zstd gzip
+	# Las fotos del chat y de los partes pueden pesar varios MB
+	request_body {
+		max_size 25MB
+	}
+	reverse_proxy api:8080
+}

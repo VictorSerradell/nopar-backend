@@ -3,6 +3,7 @@ package com.company.nopar.repository;
 import com.company.nopar.entity.WaveMessage;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -40,6 +41,15 @@ public interface WaveMessageRepository extends JpaRepository<WaveMessage, Long> 
     /** El id del último mensaje del chat de una ola un día; null si todavía no hay ninguno. */
     @Query("select max(m.id) from WaveMessage m where m.waveId = :waveId and m.workDate = :date")
     Long findNewestId(@Param("waveId") Long waveId, @Param("date") LocalDate date);
+
+    /** Los ficheros de las fotos de los mensajes de días anteriores a uno dado: se leen antes de borrar sus filas. */
+    @Query("select m.photoFile from WaveMessage m where m.workDate < :cutoff and m.photoFile is not null")
+    List<String> findPhotoFilesBefore(@Param("cutoff") LocalDate cutoff);
+
+    /** Borra los mensajes de días anteriores a uno dado, de todas las olas. Devuelve cuántos. */
+    @Modifying
+    @Query("delete from WaveMessage m where m.workDate < :cutoff")
+    int deleteOlderThan(@Param("cutoff") LocalDate cutoff);
 
     /** Un mensaje de esa ola (sin traer a su autor): para servir su foto. */
     Optional<WaveMessage> findByIdAndWaveId(Long id, Long waveId);

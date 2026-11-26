@@ -443,6 +443,31 @@ class WaveChatServiceTest {
         assertThat(service.getUnread(admin)).isEmpty();
     }
 
+    // ---------------------------------------------------------------- retencion
+
+    @Test
+    void givenOldMessagesWithPhotos_whenDeleteMessagesBefore_thenTheRowsAndTheirPhotosAreDeleted() {
+        LocalDate cutoff = LocalDate.now().minusDays(30);
+        when(messageRepository.findPhotoFilesBefore(cutoff)).thenReturn(List.of("a.jpg", "b.png"));
+        when(messageRepository.deleteOlderThan(cutoff)).thenReturn(5);
+
+        assertThat(service.deleteMessagesBefore(cutoff)).isEqualTo(5);
+
+        verify(fileStorage).delete("a.jpg");
+        verify(fileStorage).delete("b.png");
+    }
+
+    @Test
+    void givenNothingOld_whenDeleteMessagesBefore_thenNoPhotoIsTouched() {
+        LocalDate cutoff = LocalDate.now().minusDays(30);
+        when(messageRepository.findPhotoFilesBefore(cutoff)).thenReturn(List.of());
+        when(messageRepository.deleteOlderThan(cutoff)).thenReturn(0);
+
+        assertThat(service.deleteMessagesBefore(cutoff)).isZero();
+
+        verifyNoInteractions(fileStorage);
+    }
+
     // ---------------------------------------------------------------- datos de prueba
 
     private void givenWave() {

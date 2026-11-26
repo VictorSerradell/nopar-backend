@@ -208,6 +208,40 @@ class ShiftServiceTest {
     }
 
     @Test
+    void givenADeactivatedDriver_whenCreateShift_thenInvalidRequestAndNothingSaved() {
+        User deactivated = user(2L, "driver1", User.Role.DRIVER);
+        deactivated.setEnabled(false);
+        when(waveRepository.findById(1L)).thenReturn(Optional.of(wave(1L, "Ola 1", LocalTime.of(9, 30))));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(deactivated));
+
+        assertThatThrownBy(() -> shiftService.createShift(new ShiftCreateRequest(DAY, 1L, 2L, 3L), null))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("driver1")
+                .hasMessageContaining("desactivado");
+
+        verify(shiftRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void givenADriversUpcomingShifts_whenDeleteShiftsOfDriverFrom_thenTheyAreDeletedWithoutNotifyingHim() {
+        ShiftAssignment today = existingShift(4L);
+        ShiftAssignment later = existingShift(5L);
+        when(shiftRepository.findByDriverIdAndWorkDateGreaterThanEqual(2L, DAY)).thenReturn(List.of(today, later));
+
+        assertThat(shiftService.deleteShiftsOfDriverFrom(2L, DAY)).isEqualTo(2);
+
+        verify(shiftRepository).deleteAll(List.of(today, later));
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void givenNoUpcomingShifts_whenDeleteShiftsOfDriverFrom_thenZero() {
+        when(shiftRepository.findByDriverIdAndWorkDateGreaterThanEqual(2L, DAY)).thenReturn(List.of());
+
+        assertThat(shiftService.deleteShiftsOfDriverFrom(2L, DAY)).isZero();
+    }
+
+    @Test
     void givenDriverWithAnotherShiftThatDay_whenCreateShift_thenDuplicateAndNothingSaved() {
         stubWaveDriverAndVan();
         when(shiftRepository.existsByWorkDateAndDriverId(DAY, 2L)).thenReturn(true);

@@ -192,6 +192,17 @@ public class ShiftService {
         }
     }
 
+    /**
+     * Quita, sin avisar, los turnos de un conductor desde un día en adelante: es lo que pasa al desactivar su cuenta.
+     * Los partes que enlazaban esos turnos se conservan y solo pierden el enlace. Devuelve cuántos turnos quitó.
+     */
+    @Transactional
+    public int deleteShiftsOfDriverFrom(Long driverId, LocalDate from) {
+        List<ShiftAssignment> shifts = shiftRepository.findByDriverIdAndWorkDateGreaterThanEqual(driverId, from);
+        shiftRepository.deleteAll(shifts);
+        return shifts.size();
+    }
+
     /** El cuadrante completo de un rango de fechas: todos los turnos, como la tabla de olas que se comparte hoy. */
     @Transactional(readOnly = true)
     public List<ShiftAssignment> getShifts(LocalDate from, LocalDate to) {
@@ -218,12 +229,15 @@ public class ShiftService {
                 .orElseThrow(() -> new ResourceNotFoundException("Vehículo no encontrado con ID: " + id));
     }
 
-    /** El usuario tiene que existir y ser conductor: un administrador no sale a repartir. */
+    /** El usuario tiene que existir, ser conductor (un administrador no sale a repartir) y estar activo. */
     private User findDriver(Long id) {
         User driver = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con ID: " + id));
         if (driver.getRole() != User.Role.DRIVER) {
             throw new InvalidRequestException("El usuario " + driver.getUsername() + " no es un conductor");
+        }
+        if (!driver.isEnabled()) {
+            throw new InvalidRequestException("El usuario " + driver.getUsername() + " está desactivado");
         }
         return driver;
     }

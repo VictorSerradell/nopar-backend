@@ -12,6 +12,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,7 +33,7 @@ public class AdminUserController {
     private final UserService userService;
 
     @Operation(summary = "Lista los usuarios",
-            description = "Todos, administradores incluidos, por nombre. Nunca incluye la contraseña. La app de administración la usa para elegir a quién restablecer la contraseña.")
+            description = "Todos, administradores y cuentas desactivadas incluidos, por nombre. Nunca incluye la contraseña. La app de administración la usa para elegir a quién restablecer la contraseña o desactivar. Cada usuario indica si está activo (enabled) y si es super administrador (superAdmin).")
     @GetMapping
     public List<UserResponse> listUsers() {
         return userService.listUsers().stream().map(UserResponse::from).toList();
@@ -53,6 +54,27 @@ public class AdminUserController {
     public ResponseEntity<UserResponse> createManager(@Valid @RequestBody CreateUserRequest request) {
         User created = userService.createManager(request.username(), request.password());
         return ResponseEntity.status(HttpStatus.CREATED).body(UserResponse.from(created));
+    }
+
+    @Operation(summary = "Desactiva una cuenta",
+            description = "Solo un super administrador. La cuenta conserva todo su historial, pero ya no puede iniciar sesión: se cierran sus sesiones, se dan de baja sus dispositivos push y, si es un conductor, se le quitan los turnos de hoy y de días futuros sin avisarle. Repetirlo sobre una cuenta ya desactivada no hace nada.")
+    @ApiResponse(responseCode = "400", description = "Es tu propia cuenta o la de otro super administrador")
+    @ApiResponse(responseCode = "403", description = "Quien lo pide no es super administrador")
+    @ApiResponse(responseCode = "404", description = "No existe ese usuario")
+    @PatchMapping("/{id}/deactivate")
+    public ResponseEntity<Void> deactivate(@PathVariable Long id, @AuthenticationPrincipal User actor) {
+        userService.deactivateUser(id, actor);
+        return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "Reactiva una cuenta desactivada",
+            description = "Solo un super administrador. La cuenta vuelve a poder iniciar sesión con su contraseña; no recupera los turnos que se le quitaron al desactivarla.")
+    @ApiResponse(responseCode = "403", description = "Quien lo pide no es super administrador")
+    @ApiResponse(responseCode = "404", description = "No existe ese usuario")
+    @PatchMapping("/{id}/activate")
+    public ResponseEntity<Void> activate(@PathVariable Long id, @AuthenticationPrincipal User actor) {
+        userService.activateUser(id, actor);
+        return ResponseEntity.noContent().build();
     }
 
     @Operation(summary = "Restablece la contraseña de un conductor o de un encargado",

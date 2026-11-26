@@ -72,6 +72,28 @@ class AdminUserControllerTest {
     }
 
     @Test
+    void whenListUsers_thenShowsWhoIsDeactivatedAndWhoIsSuperAdmin() throws Exception {
+        User boss = new User();
+        boss.setId(1L);
+        boss.setUsername("jefe");
+        boss.setRole(User.Role.ADMIN);
+        boss.setSuperAdmin(true);
+        User former = new User();
+        former.setId(2L);
+        former.setUsername("ana");
+        former.setRole(User.Role.DRIVER);
+        former.setEnabled(false);
+        when(userService.listUsers()).thenReturn(List.of(boss, former));
+
+        mockMvc.perform(get("/api/v1/admin/users"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].enabled").value(true))
+                .andExpect(jsonPath("$[0].superAdmin").value(true))
+                .andExpect(jsonPath("$[1].enabled").value(false))
+                .andExpect(jsonPath("$[1].superAdmin").value(false));
+    }
+
+    @Test
     void givenValidRequest_whenCreateDriver_thenCreatedWithoutPasswordInTheResponse() throws Exception {
         User created = new User();
         created.setId(10L);

@@ -62,7 +62,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
 
-                if (jwtService.isTokenValid(jwt, userDetails)) {
+                // Una cuenta desactivada deja de valer al instante, aunque su access token no haya caducado
+                if (userDetails.isEnabled() && jwtService.isTokenValid(jwt, userDetails)) {
                     // Los roles salen de la BD (userDetails), no del token: un cambio de rol se aplica
                     // de inmediato en vez de esperar a que caduque el token ya emitido.
                     UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(

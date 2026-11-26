@@ -67,6 +67,10 @@ public class RefreshTokenService {
         if (stored.getExpiryDate().isBefore(Instant.now())) {
             throw invalidToken();
         }
+        // Una cuenta desactivada no renueva su sesión (al desactivarla ya se borraron sus tokens: esto es una red de seguridad)
+        if (!stored.getUser().isEnabled()) {
+            throw invalidToken();
+        }
 
         return issueFor(stored.getUser());
     }

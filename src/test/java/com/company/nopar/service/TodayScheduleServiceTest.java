@@ -79,6 +79,19 @@ class TodayScheduleServiceTest {
     }
 
     @Test
+    void whenGetToday_thenDeactivatedDriversAreNotOffered() {
+        User deactivated = driver(3L, "bea");
+        deactivated.setEnabled(false);
+        when(shiftService.getWaves()).thenReturn(List.of());
+        when(shiftRepository.findInRange(any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
+        when(userRepository.findByRole(any(User.Role.class), any(Sort.class)))
+                .thenReturn(List.of(driver(2L, "ana"), deactivated));
+        when(vehicleRepository.findAll(any(Sort.class))).thenReturn(List.of());
+
+        assertThat(service.getToday().freeDrivers()).extracting(User::getUsername).containsExactly("ana");
+    }
+
+    @Test
     void whenGetToday_thenDriversAreAskedForByRoleSortedByNameIgnoringCase() {
         when(shiftService.getWaves()).thenReturn(List.of());
         when(shiftRepository.findInRange(any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());

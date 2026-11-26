@@ -2,6 +2,7 @@ package com.company.nopar.integration;
 
 import com.company.nopar.config.ExpiredRefreshTokenCleanup;
 import com.company.nopar.config.NightlyVehicleReset;
+import com.company.nopar.config.WaveChatRetention;
 import com.company.nopar.dto.AnnouncementRequest;
 import com.company.nopar.dto.BoardAnnouncementResponse;
 import com.company.nopar.dto.InspectionCreateRequest;
@@ -40,6 +41,7 @@ import com.company.nopar.repository.WaveMessageRepository;
 import com.company.nopar.repository.WaveRepository;
 import com.company.nopar.service.AnnouncementService;
 import com.company.nopar.service.DeviceService;
+import com.company.nopar.service.FileStorageService;
 import com.company.nopar.service.InspectionService;
 import com.company.nopar.service.RefreshTokenService;
 import com.company.nopar.service.ShiftService;
@@ -194,6 +196,10 @@ class PostgresIntegrationTest {
     @Autowired
     private NightlyVehicleReset nightlyVehicleReset;
     @Autowired
+    private WaveChatRetention waveChatRetention;
+    @Autowired
+    private FileStorageService fileStorageService;
+    @Autowired
     private RefreshTokenService refreshTokenService;
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
@@ -260,7 +266,7 @@ class PostgresIntegrationTest {
         List<String> uniques = jdbc.queryForList(
                 "select conname from pg_constraint where contype = 'u'", String.class);
 
-        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12");
+        assertThat(applied).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13");
         assertThat(indexes).contains(
                 "idx_vehicle_inspections_vehicle_date",
                 "idx_vehicle_inspections_driver_date",
@@ -659,6 +665,13 @@ class PostgresIntegrationTest {
                 // cambiar la contraseña exige token (hereda el requisito global) y el cuerpo lleva la actual y la nueva
                 .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch.security").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/v1/auth/password'].patch.responses['403']").exists())
+                // desactivar y reactivar cuentas (solo el super administrador); la lista dice quién está activo
+                .andExpect(jsonPath("$.paths['/api/v1/admin/users/{id}/deactivate'].patch.responses['204']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/users/{id}/deactivate'].patch.responses['403']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/users/{id}/activate'].patch.responses['204']").exists())
+                .andExpect(jsonPath("$.components.schemas.UserResponse.properties.enabled").exists())
+                .andExpect(jsonPath("$.components.schemas.UserResponse.properties.superAdmin").exists())
                 .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.currentPassword").exists())
                 .andExpect(jsonPath("$.components.schemas.ChangePasswordRequest.properties.newPassword").exists())
                 // el administrador restablece la contraseña de un conductor sin conocer la actual
@@ -777,18 +790,18 @@ class PostgresIntegrationTest {
     }
 
     @Test
-    void changingThePasswordKeepsThisDeviceLoggedInAndClosesEveryOtherSession() throws Exception {
-        User driver = userService.createDriver("driver1", "clave-vieja-123");
+    void aManagerChangingThePasswordKeepsThisDeviceLoggedInAndClosesEveryOtherSession() throws Exception {
+        User manager = userService.createManager("encargado1", "clave-vieja-123");
         User other = userService.createDriver("driver2", "otra-clave-123");
-        deviceService.registerDevice(driver, "tok-driver1-movil", DeviceToken.Platform.ANDROID);
-        deviceService.registerDevice(driver, "tok-driver1-tablet", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(manager, "tok-manager-movil", DeviceToken.Platform.ANDROID);
+        deviceService.registerDevice(manager, "tok-manager-tablet", DeviceToken.Platform.ANDROID);
         deviceService.registerDevice(other, "tok-driver2", DeviceToken.Platform.IOS);
 
         // Dos dispositivos con la sesión iniciada de verdad: login contra la BD, con BCrypt y JWT reales
-        ResultActions phone = login("driver1", "clave-vieja-123").andExpect(status().isOk());
+        ResultActions phone = login("encargado1", "clave-vieja-123").andExpect(status().isOk());
         String phoneAccess = field(phone, "accessToken");
         String phoneRefresh = field(phone, "refreshToken");
-        String tabletRefresh = field(login("driver1", "clave-vieja-123").andExpect(status().isOk()), "refreshToken");
+        String tabletRefresh = field(login("encargado1", "clave-vieja-123").andExpect(status().isOk()), "refreshToken");
         assertThat(refreshTokenRepository.count()).isEqualTo(2);
 
         String change = "{\"currentPassword\": \"clave-vieja-123\", \"newPassword\": \"clave-nueva-456\"}";
@@ -805,7 +818,7 @@ class PostgresIntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("La contraseña actual no es correcta"));
         assertThat(refreshTokenRepository.count()).isEqualTo(2);
-        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isEqualTo(2);
+        assertThat(deviceTokenRepository.countByUserId(manager.getId())).isEqualTo(2);
 
         // Con la actual correcta: 200 y un par de tokens nuevo para este dispositivo
         ResultActions changed = mockMvc.perform(patch("/api/v1/auth/password")
@@ -822,7 +835,7 @@ class PostgresIntegrationTest {
         assertThat(refreshTokenRepository.count()).isEqualTo(1);
 
         // Y los dispositivos push del usuario se dan de baja (la app vuelve a registrar el suyo); los de otro, no
-        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isZero();
+        assertThat(deviceTokenRepository.countByUserId(manager.getId())).isZero();
         assertThat(deviceTokenRepository.countByUserId(other.getId())).isEqualTo(1);
         assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(phoneRefresh))
                 .isInstanceOf(InvalidRefreshTokenException.class);
@@ -838,8 +851,123 @@ class PostgresIntegrationTest {
                 .andExpect(status().isNoContent());
 
         // La contraseña vieja ya no sirve y la nueva sí
-        login("driver1", "clave-vieja-123").andExpect(status().isUnauthorized());
-        login("driver1", "clave-nueva-456").andExpect(status().isOk());
+        login("encargado1", "clave-vieja-123").andExpect(status().isUnauthorized());
+        login("encargado1", "clave-nueva-456").andExpect(status().isOk());
+    }
+
+    @Test
+    void onlyAnAdminCanBeSuperAdminInTheDatabase() {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        User manager = saveUser("encargado1", User.Role.MANAGER);
+        User admin = saveUser("admin1", User.Role.ADMIN);
+
+        assertThatThrownBy(() -> jdbc.update("update users set super_admin = true where id = ?", manager.getId()))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(jdbc.update("update users set super_admin = true where id = ?", admin.getId())).isEqualTo(1);
+        // Las cuentas nuevas nacen activas y sin el rango
+        assertThat(jdbc.queryForObject("select enabled from users where id = ?", Boolean.class, manager.getId())).isTrue();
+        assertThat(jdbc.queryForObject("select super_admin from users where id = ?", Boolean.class, manager.getId())).isFalse();
+    }
+
+    @Test
+    void aSuperAdminDeactivatesAnAccountKeepingItsHistoryAndNobodyElseCan() throws Exception {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        User boss = userService.createSuperAdmin("jefe", "clave-jefe-123");
+        userService.createUser("admin2", "clave-admin-123", User.Role.ADMIN);
+        User driver = userService.createDriver("driver1", "clave-driver-1");
+        User other = userService.createDriver("driver2", "otra-clave-123");
+        Wave wave = saveWave("Ola 1", LocalTime.of(9, 30));
+        Vehicle van = saveVehicle("1111AAA", 1000);
+        Vehicle otherVan = saveVehicle("2222BBB", 2000);
+        LocalDate today = LocalDate.now();
+        shiftAssignmentRepository.save(shift(today.minusDays(2), wave, driver, van, boss));
+        shiftAssignmentRepository.save(shift(today, wave, driver, van, boss));
+        shiftAssignmentRepository.save(shift(today.plusDays(3), wave, driver, van, boss));
+        shiftAssignmentRepository.save(shift(today, wave, other, otherVan, boss));
+        VehicleInspection report = report(van, driver, 1100, null); // historial: debe sobrevivir
+        deviceService.registerDevice(driver, "tok-driver1", DeviceToken.Platform.ANDROID);
+
+        ResultActions session = login("driver1", "clave-driver-1").andExpect(status().isOk());
+        String driverAccess = field(session, "accessToken");
+        String driverRefresh = field(session, "refreshToken");
+        String bossAccess = field(login("jefe", "clave-jefe-123").andExpect(status().isOk()), "accessToken");
+        String adminAccess = field(login("admin2", "clave-admin-123").andExpect(status().isOk()), "accessToken");
+        String path = "/api/v1/admin/users/" + driver.getId() + "/deactivate";
+
+        // Sin token, un administrador que no es super y el propio conductor no pueden: no cambia nada
+        mockMvc.perform(patch(path)).andExpect(status().isUnauthorized());
+        mockMvc.perform(patch(path).header("Authorization", "Bearer " + adminAccess)).andExpect(status().isForbidden());
+        mockMvc.perform(patch(path).header("Authorization", "Bearer " + driverAccess)).andExpect(status().isForbidden());
+        assertThat(jdbc.queryForObject("select enabled from users where id = ?", Boolean.class, driver.getId())).isTrue();
+
+        // El super administrador no puede desactivarse a sí mismo, y un usuario que no existe es un 404
+        mockMvc.perform(patch("/api/v1/admin/users/" + boss.getId() + "/deactivate")
+                        .header("Authorization", "Bearer " + bossAccess))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(patch("/api/v1/admin/users/" + (driver.getId() + 1000) + "/deactivate")
+                        .header("Authorization", "Bearer " + bossAccess))
+                .andExpect(status().isNotFound());
+
+        // Lo desactiva el super administrador (y repetirlo no falla)
+        mockMvc.perform(patch(path).header("Authorization", "Bearer " + bossAccess)).andExpect(status().isNoContent());
+        mockMvc.perform(patch(path).header("Authorization", "Bearer " + bossAccess)).andExpect(status().isNoContent());
+
+        // No puede iniciar sesión, su access token (aún sin caducar) deja de valer y su refresh token no renueva nada
+        login("driver1", "clave-driver-1").andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/chat/unread").header("Authorization", "Bearer " + driverAccess))
+                .andExpect(status().isUnauthorized());
+        assertThatThrownBy(() -> refreshTokenService.rotateRefreshToken(driverRefresh))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        // Sin sesiones ni dispositivos, y sin los turnos de hoy y futuros; el turno pasado y el otro conductor, intactos
+        assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where user_id = ?", Long.class, driver.getId()))
+                .isZero();
+        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isZero();
+        assertThat(jdbc.queryForList("select work_date from shift_assignments where driver_id = ? order by work_date",
+                LocalDate.class, driver.getId())).containsExactly(today.minusDays(2));
+        assertThat(jdbc.queryForObject("select count(*) from shift_assignments where driver_id = ?", Long.class,
+                other.getId())).isEqualTo(1L);
+
+        // El historial se conserva: la cuenta sigue ahí y su parte también (solo pierde el enlace al turno que se quitó)
+        assertThat(jdbc.queryForObject("select enabled from users where id = ?", Boolean.class, driver.getId())).isFalse();
+        assertThat(jdbc.queryForObject("select count(*) from vehicle_inspections where driver_id = ?", Long.class,
+                driver.getId())).isEqualTo(1L);
+        assertThat(jdbc.queryForList("select shift_id from vehicle_inspections where id = ?", Long.class,
+                report.getId())).hasSize(1).containsOnlyNulls();
+
+        // La lista de usuarios lo marca como desactivado y señala al super administrador
+        mockMvc.perform(get("/api/v1/admin/users").header("Authorization", "Bearer " + bossAccess))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.username == 'driver1')].enabled").value(false))
+                .andExpect(jsonPath("$[?(@.username == 'driver2')].enabled").value(true))
+                .andExpect(jsonPath("$[?(@.username == 'jefe')].superAdmin").value(true))
+                .andExpect(jsonPath("$[?(@.username == 'admin2')].superAdmin").value(false));
+
+        // Reactivarlo también es cosa del super administrador, y con su contraseña de siempre vuelve a entrar
+        String activate = "/api/v1/admin/users/" + driver.getId() + "/activate";
+        mockMvc.perform(patch(activate).header("Authorization", "Bearer " + adminAccess)).andExpect(status().isForbidden());
+        login("driver1", "clave-driver-1").andExpect(status().isUnauthorized());
+        mockMvc.perform(patch(activate).header("Authorization", "Bearer " + bossAccess)).andExpect(status().isNoContent());
+        login("driver1", "clave-driver-1").andExpect(status().isOk());
+    }
+
+    @Test
+    void aDriverCannotChangeHisOwnPasswordAndKeepsHisSessionsAndDevices() throws Exception {
+        User driver = userService.createDriver("driver1", "clave-vieja-123");
+        deviceService.registerDevice(driver, "tok-driver1-movil", DeviceToken.Platform.ANDROID);
+        String access = field(login("driver1", "clave-vieja-123").andExpect(status().isOk()), "accessToken");
+
+        mockMvc.perform(patch("/api/v1/auth/password")
+                        .header("Authorization", "Bearer " + access)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\": \"clave-vieja-123\", \"newPassword\": \"clave-nueva-456\"}"))
+                .andExpect(status().isForbidden());
+
+        // No cambia nada: la contraseña, la sesión y el dispositivo siguen como estaban
+        assertThat(refreshTokenRepository.count()).isEqualTo(1);
+        assertThat(deviceTokenRepository.countByUserId(driver.getId())).isEqualTo(1);
+        login("driver1", "clave-vieja-123").andExpect(status().isOk());
+        login("driver1", "clave-nueva-456").andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -1641,6 +1769,35 @@ class PostgresIntegrationTest {
     }
 
     @Test
+    void theNightlyChatRetentionDeletesOldMessagesAndTheirPhotosButKeepsTheRecentOnes() throws Exception {
+        User ana = saveUser("ana", User.Role.DRIVER);
+        Wave wave1 = saveWave("Ola 1", LocalTime.of(9, 30));
+        Wave wave2 = saveWave("Ola 2", LocalTime.of(10, 30));
+        LocalDate today = LocalDate.now();
+
+        // Con 30 días de retención: lo de hace más de 30 días se va, el día límite y lo posterior se queda
+        String oldPhoto = fileStorageService.storeFile(new MockMultipartFile("photo", "vieja.jpg", "image/jpeg", JPEG));
+        String limitPhoto = fileStorageService.storeFile(new MockMultipartFile("photo", "limite.jpg", "image/jpeg", JPEG));
+        long oldText = saveChatMessage(wave1, today.minusDays(31), ana, "muy viejo");
+        long oldWithPhoto = saveChatMessage(wave2, today.minusDays(45), ana, null, oldPhoto);
+        long limit = saveChatMessage(wave1, today.minusDays(30), ana, "justo en el límite", limitPhoto);
+        long recent = saveChatMessage(wave1, today.minusDays(1), ana, "de ayer");
+        long current = saveChatMessage(wave2, today, ana, "de hoy");
+
+        waveChatRetention.deleteOldMessages();
+
+        assertThat(waveMessageRepository.findAllById(List.of(oldText, oldWithPhoto, limit, recent, current)))
+                .extracting(WaveMessage::getId)
+                .containsExactlyInAnyOrder(limit, recent, current);
+        assertThat(Files.exists(UPLOADS.resolve(oldPhoto))).isFalse();
+        assertThat(Files.exists(UPLOADS.resolve(limitPhoto))).isTrue();
+
+        // Una segunda pasada no encuentra nada más que borrar y no falla
+        waveChatRetention.deleteOldMessages();
+        assertThat(waveMessageRepository.count()).isEqualTo(3L);
+    }
+
+    @Test
     void callingAWaveNotifiesOnlyItsDriversTodayAndTheyConfirmWithEnterado() throws Exception {
         User admin = saveUser("admin1", User.Role.ADMIN);
         User manager = saveUser("encargado1", User.Role.MANAGER);
@@ -2186,11 +2343,16 @@ class PostgresIntegrationTest {
     }
 
     private long saveChatMessage(Wave wave, LocalDate day, User sender, String body) {
+        return saveChatMessage(wave, day, sender, body, null);
+    }
+
+    private long saveChatMessage(Wave wave, LocalDate day, User sender, String body, String photoFile) {
         WaveMessage message = new WaveMessage();
         message.setWaveId(wave.getId());
         message.setWorkDate(day);
         message.setSender(sender);
         message.setBody(body);
+        message.setPhotoFile(photoFile);
         return waveMessageRepository.save(message).getId();
     }
 

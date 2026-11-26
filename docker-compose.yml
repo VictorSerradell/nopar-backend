@@ -4,6 +4,10 @@
 #   docker compose logs -f api       # ver el log de la API
 #   docker compose down              # parar (los datos y las fotos se conservan en volúmenes)
 #
+# Con HTTPS (en un servidor con dominio propio): añade NOPAR_DOMAIN al .env y arranca con el perfil https, que
+# levanta además Caddy delante de la API y gestiona solo el certificado (ver DESPLIEGUE.md):
+#   docker compose --profile https up --build -d
+#
 # Las variables salen del fichero .env de esta carpeta, el mismo que usa la aplicación en local (ver .env.example).
 # POSTGRES_PASSWORD solo se aplica al crear el volumen la primera vez: cambiar DB_PASSWORD después no cambia
 # la contraseña de la base de datos ya creada.
@@ -37,6 +41,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Falta JWT_SECRET en el fichero .env}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SUPER_ADMIN_USERNAME: ${SUPER_ADMIN_USERNAME:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
+      CHAT_RETENTION_DAYS: ${CHAT_RETENTION_DAYS:-30}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       OPENAPI_ENABLED: ${OPENAPI_ENABLED:-true}
       SHOW_SQL: ${SHOW_SQL:-false}
@@ -48,6 +55,26 @@ services:
       - uploads:/data/uploads
       - ./secrets:/run/secrets/nopar:ro
 
+  # HTTPS opcional: solo arranca con --profile https. Caddy pide y renueva el certificado de NOPAR_DOMAIN por sí solo
+  # (el dominio tiene que apuntar a este servidor y los puertos 80 y 443 estar abiertos) y reenvía a la API.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      NOPAR_DOMAIN: ${NOPAR_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # los certificados: se conservan entre reinicios
+      - caddy-config:/config
+
 volumes:
   db-data:
   uploads:
+  caddy-data:
+  caddy-config:

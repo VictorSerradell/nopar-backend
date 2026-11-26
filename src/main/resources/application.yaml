@@ -50,6 +50,19 @@ application:
       # Solo se usan si no existe ningún administrador; tras el primer arranque pueden quitarse
       username: ${ADMIN_USERNAME:}
       password: ${ADMIN_PASSWORD:}
+    super-admin:
+      # El super administrador puede desactivar y reactivar cuentas. Se crea si no existe ninguno; si el usuario ya
+      # es administrador, se le da el rango sin tocar su contraseña. Tras el primer arranque pueden quitarse
+      username: ${SUPER_ADMIN_USERNAME:}
+      password: ${SUPER_ADMIN_PASSWORD:}
+  chat:
+    retention:
+      # Los mensajes del chat de las olas, y sus fotos, de hace más de estos días se borran solos cada noche
+      # (CHAT_RETENTION_DAYS=0 lo desactiva y conserva todo). Cron de 6 campos (segundos incluidos) en la zona
+      # indicada; "-" también lo desactiva
+      days: ${CHAT_RETENTION_DAYS:30}
+      cron: "0 45 3 * * *"
+      zone: Europe/Madrid
   fleet:
     nightly-reset:
       # Red de seguridad: a esta hora los vehículos que siguen IN_USE (nadie los devolvió) pasan a AVAILABLE.

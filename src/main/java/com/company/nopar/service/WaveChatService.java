@@ -17,6 +17,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
@@ -207,6 +209,35 @@ public class WaveChatService {
             }
         }
         return unread;
+    }
+
+    /**
+     * Borra los mensajes de días anteriores a {@code cutoff} (de todas las olas) y las fotos que llevaban. Las fotos se
+     * borran del disco una vez confirmada la transacción: si esta fallara, los mensajes seguirían ahí y no pueden
+     * quedarse con la foto rota. Devuelve cuántos mensajes se han borrado.
+     */
+    @Transactional
+    public int deleteMessagesBefore(LocalDate cutoff) {
+        List<String> photos = messageRepository.findPhotoFilesBefore(cutoff);
+        int deleted = messageRepository.deleteOlderThan(cutoff);
+        deleteFilesAfterCommit(photos);
+        return deleted;
+    }
+
+    private void deleteFilesAfterCommit(List<String> files) {
+        if (files.isEmpty()) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    files.forEach(fileStorage::delete);
+                }
+            });
+        } else {
+            files.forEach(fileStorage::delete);
+        }
     }
 
     private Wave findWave(Long waveId) {

@@ -111,14 +111,14 @@ class AuthEndpointsSecurityTest {
     }
 
     @Test
-    void givenAuthenticatedUser_whenChangePassword_thenOkWithAFreshPairOfTokens() throws Exception {
-        when(userService.changePassword(1L, "clave-vieja-123", "clave-nueva-456")).thenReturn(driver());
+    void givenAManager_whenChangePassword_thenOkWithAFreshPairOfTokens() throws Exception {
+        when(userService.changePassword(2L, "clave-vieja-123", "clave-nueva-456")).thenReturn(manager());
         when(jwtService.generateToken(any(User.class))).thenReturn("access-nuevo");
         when(refreshTokenService.createRefreshToken(any(User.class)))
-                .thenReturn(new IssuedRefreshToken("refresh-nuevo", driver()));
+                .thenReturn(new IssuedRefreshToken("refresh-nuevo", manager()));
 
         mockMvc.perform(patch("/api/v1/auth/password")
-                        .with(user(driver()))
+                        .with(user(manager()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(PASSWORD_CHANGE))
                 .andExpect(status().isOk())
@@ -126,17 +126,45 @@ class AuthEndpointsSecurityTest {
                 .andExpect(jsonPath("$.refreshToken").value("refresh-nuevo"));
 
         // El id sale del usuario del token, no del cuerpo: nadie puede cambiar la contraseña de otro
-        verify(userService).changePassword(1L, "clave-vieja-123", "clave-nueva-456");
+        verify(userService).changePassword(2L, "clave-vieja-123", "clave-nueva-456");
+    }
+
+    @Test
+    void givenADriver_whenChangePassword_thenForbiddenAndNothingChanges() throws Exception {
+        // Un conductor no cambia su contraseña: se la restablece un administrador
+        mockMvc.perform(patch("/api/v1/auth/password")
+                        .with(user(driver()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(PASSWORD_CHANGE))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(userService, refreshTokenService);
+    }
+
+    @Test
+    void givenAnAdmin_whenChangePassword_thenOk() throws Exception {
+        User admin = manager();
+        admin.setRole(User.Role.ADMIN);
+        when(userService.changePassword(2L, "clave-vieja-123", "clave-nueva-456")).thenReturn(admin);
+        when(jwtService.generateToken(any(User.class))).thenReturn("access-nuevo");
+        when(refreshTokenService.createRefreshToken(any(User.class)))
+                .thenReturn(new IssuedRefreshToken("refresh-nuevo", admin));
+
+        mockMvc.perform(patch("/api/v1/auth/password")
+                        .with(user(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(PASSWORD_CHANGE))
+                .andExpect(status().isOk());
     }
 
     @Test
     void givenAWrongCurrentPassword_whenChangePassword_thenBadRequestInsteadOfUnauthorizedAndNoTokensAreIssued() throws Exception {
-        when(userService.changePassword(1L, "clave-vieja-123", "clave-nueva-456"))
+        when(userService.changePassword(2L, "clave-vieja-123", "clave-nueva-456"))
                 .thenThrow(new InvalidRequestException("La contraseña actual no es correcta"));
 
         // 400 y no 401: el usuario sigue autenticado, y un 401 haría que el cliente intentara renovar o cerrar la sesión
         mockMvc.perform(patch("/api/v1/auth/password")
-                        .with(user(driver()))
+                        .with(user(manager()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(PASSWORD_CHANGE))
                 .andExpect(status().isBadRequest())
@@ -149,7 +177,7 @@ class AuthEndpointsSecurityTest {
     @Test
     void givenBlankCurrentAndShortNewPassword_whenChangePassword_thenBadRequestWithFieldErrors() throws Exception {
         mockMvc.perform(patch("/api/v1/auth/password")
-                        .with(user(driver()))
+                        .with(user(manager()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"currentPassword": "  ", "newPassword": "corta"}
@@ -166,13 +194,22 @@ class AuthEndpointsSecurityTest {
         String tooLong = "a".repeat(73);
 
         mockMvc.perform(patch("/api/v1/auth/password")
-                        .with(user(driver()))
+                        .with(user(manager()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"currentPassword\": \"clave-vieja-123\", \"newPassword\": \"" + tooLong + "\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.newPassword").value("La nueva contraseña debe tener entre 8 y 72 caracteres"));
 
         verifyNoInteractions(userService);
+    }
+
+    private static User manager() {
+        User user = new User();
+        user.setId(2L);
+        user.setUsername("encargado1");
+        user.setPassword("no-importa");
+        user.setRole(User.Role.MANAGER);
+        return user;
     }
 
     private static User driver() {

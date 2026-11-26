@@ -85,6 +85,21 @@ class RefreshTokenServiceTest {
     }
 
     @Test
+    void givenADeactivatedUser_whenRotate_thenRejectedAndNothingIsIssued() {
+        user.setEnabled(false);
+        String presented = "token-de-una-cuenta-desactivada";
+        String hash = RefreshTokenService.hash(presented);
+        when(refreshTokenRepository.findByTokenHash(hash))
+                .thenReturn(Optional.of(stored(hash, Instant.now().plusSeconds(3600))));
+        when(refreshTokenRepository.deleteByTokenHash(hash)).thenReturn(1);
+
+        assertThatThrownBy(() -> service.rotateRefreshToken(presented))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        verify(refreshTokenRepository, never()).save(any());
+    }
+
+    @Test
     void givenUnknownToken_whenRotate_thenInvalidAndNothingIsIssued() {
         assertThatThrownBy(() -> service.rotateRefreshToken("desconocido"))
                 .isInstanceOf(InvalidRefreshTokenException.class);

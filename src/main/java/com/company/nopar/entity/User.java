@@ -34,6 +34,14 @@ public class User implements UserDetails {
     @Column(nullable = false)
     private Role role;
 
+    /** Una cuenta desactivada conserva su historial, pero no puede iniciar sesión ni usar la app. */
+    @Column(nullable = false)
+    private boolean enabled = true;
+
+    /** El super administrador es un administrador que además puede desactivar y reactivar a otros usuarios. */
+    @Column(name = "super_admin", nullable = false)
+    private boolean superAdmin = false;
+
     public enum Role {
         /** Conductor. */
         DRIVER,
@@ -59,5 +67,5 @@ public class User implements UserDetails {
     public boolean isCredentialsNonExpired() { return true; }
 
     @Override
-    public boolean isEnabled() { return true; }
+    public boolean isEnabled() { return enabled; }
 }
